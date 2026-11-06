@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+logs/
+.local-certs/
+config.local.yaml
+.neat-apps-launcher.pid
+.neat-apps-launcher.url
+runs/
+.pytest_cache/
+.cache/

@@ -1,0 +1,192 @@
+# Neat Apps Launcher settings and per-app overrides.
+#
+# The app list itself is src/launcher/catalog.json, generated from
+# sima-neat/apps by tools/build_catalog.py. Entries under `apps:` below
+# change or add fields for one app (matched by id = the app's folder name).
+# Override any of this without editing the file: put the same keys in
+# config.local.yaml next to run.sh.
+
+install_root: /media/nvme          # prebuilt-apps/ is installed here
+bundle_dir: prebuilt-apps          # relative to install_root
+bundle_branch: main                # sima-neat/apps branch of the bundle
+sima_cli: /data/sima-cli/.venv/bin/sima-cli   # falls back to sima-cli on PATH
+pyneat: ~/pyneat                   # Python environment with pyneat (Python apps)
+
+insight:
+  port: 9900
+  venv: ~/.simaai/neat-insight/venv
+  # Sample videos for the streaming apps (H.264, 720p, 16 fps).
+  samples: https://artifacts.sima-neat.com/assets/videos/720p16/video{n:02d}.mp4
+  sample_count: 16
+
+studio_launcher_port: 8090         # Neat Studio Launcher, linked from GenAI apps
+
+# Sample input images ------------------------------------------------------------
+# Photo sets for the apps that read pictures, downloaded into the launcher's
+# cache (cache/images/<set>/) by Set Up Everything, Get Them (Manager) or the
+# first run. An app uses one with `sample_images: <set>` below; without it, or
+# when the download fails, the app reads the bundle's own images.
+sample_images:
+  scenes:
+    label: 24 everyday scenes (people, streets, animals, rooms, sports, vehicles)
+    source: COCO val2017 (cocodataset.org, CC BY 4.0 annotations; Flickr images under their own licenses)
+    from: http://images.cocodataset.org/val2017/
+    files:
+      - 000000000139.jpg
+      - 000000000285.jpg
+      - 000000000632.jpg
+      - 000000000785.jpg
+      - 000000001000.jpg
+      - 000000001532.jpg
+      - 000000001584.jpg
+      - 000000002153.jpg
+      - 000000002685.jpg
+      - 000000008211.jpg
+      - 000000008690.jpg
+      - 000000008844.jpg
+      - 000000011197.jpg
+      - 000000018150.jpg
+      - 000000025560.jpg
+      - 000000037777.jpg
+      - 000000039769.jpg
+      - 000000087038.jpg
+      - 000000174482.jpg
+      - 000000181666.jpg
+      - 000000252219.jpg
+      - 000000348881.jpg
+      - 000000463730.jpg
+      - 000000480985.jpg
+  faces:
+    label: 12 photos of people, from close portraits to a crowded class photo
+    source: COCO val2017 (cocodataset.org)
+    from: http://images.cocodataset.org/val2017/
+    files:
+      - 000000001000.jpg
+      - 000000001296.jpg
+      - 000000002299.jpg
+      - 000000002685.jpg
+      - 000000005001.jpg
+      - 000000008532.jpg
+      - 000000008690.jpg
+      - 000000008844.jpg
+      - 000000013729.jpg
+      - 000000015335.jpg
+      - 000000018150.jpg
+      - 000000386912.jpg
+  imagenet:
+    label: 16 ImageNet classes (animals, vehicles, food, objects)
+    source: github.com/EliSchwartz/imagenet-sample-images (one image per ImageNet class)
+    from: https://raw.githubusercontent.com/EliSchwartz/imagenet-sample-images/master/
+    files:
+      - n01443537_goldfish.JPEG
+      - n02123045_tabby.JPEG
+      - n02099601_golden_retriever.JPEG
+      - n02504458_African_elephant.JPEG
+      - n02391049_zebra.JPEG
+      - n02129165_lion.JPEG
+      - n01614925_bald_eagle.JPEG
+      - n02279972_monarch.JPEG
+      - n04146614_school_bus.JPEG
+      - n04285008_sports_car.JPEG
+      - n02690373_airliner.JPEG
+      - n03792782_mountain_bike.JPEG
+      - n02676566_acoustic_guitar.JPEG
+      - n07873807_pizza.JPEG
+      - n07920052_espresso.JPEG
+      - n07745940_strawberry.JPEG
+
+# Per-app overrides ------------------------------------------------------------
+#   hidden: true            leave it out of the catalog
+#   needs: "..."            hardware or setup the app needs (shown as a warning)
+#   media: [paths]          stream these bundle files instead of the sample videos
+#   sample_images: <set>    read this sample image set (see sample_images above)
+#   default_models: [ids]   models downloaded and used by default
+#   streams: N              default number of streams for a multi-stream app
+#   config: {a.b: value}    set config keys on every run
+#   link: {label, url}      a button to somewhere else instead of Run
+#   placeholders: {"<name>": value}
+#                           fill other config placeholders (models/... paths resolve
+#                           to the bundle; "" blanks an unused optional source)
+#   before_first_run: {args, creates: [config keys], label}
+#                           run the app once with args when those files are missing
+#                           or older than the model (e.g. --calibrate)
+apps:
+  - id: fastflow-anomaly-detector
+    media: [assets/datasets/blue-discs/discs_demo.mp4]
+    note: Streams the bundled blue-discs clip (FastFlow was trained on square frames of it).
+
+  - id: yolo26-tiny-drone-tracker
+    media: [assets/datasets/yolo26-tiny-drone-tracker/anti_uav_multi_uav_source_demo.mp4]
+    note: Streams the bundled anti-UAV clip with several small drones.
+
+  - id: single-stream-thermal-face-detector
+    note: Built for a thermal camera. The sample streams are visible-light, so expect fewer faces; point it at your own thermal RTSP stream for the real thing.
+
+  - id: single-stream-object-detector
+    placeholders: { "<http-mjpeg-url>": "" }   # optional HTTP source; the launcher uses RTSP
+
+  - id: single-stream-instance-segmenter
+    placeholders: { "<http-mjpeg-url>": "" }
+
+  - id: multi-stream-blazepose3d
+    placeholders:
+      "<detector-model-path>": models/yolo26m-det-int8-b1.tar.gz
+      "<blazepose-model-path>": models/blazepose_ghum_heavy_w16a16_mpk.tar.gz
+
+  - id: efficientsam3-promptable-segmenter
+    placeholders:
+      "<text-encoder-path>": models/efficientsam3_text_encoder_mpk.tar.gz
+
+  - id: rfdetr-detection-segmentation
+    default_models: [rfdetr-small-backbone, rfdetr-small-transformer]
+    note: Uses the small detection pair. For the medium or segmentation models, tick them in Models, then set model.task or model.detection.variant in the config.
+
+  - id: high-density-multi-stream-object-detector
+    streams: 16
+
+  - id: mipi-camera-capture
+    needs: A MIPI CSI camera connected to the DevKit.
+
+  - id: image-classification-explorer
+    sample_images: imagenet
+    note: Classifies 16 ImageNet sample photos (goldfish, tabby, zebra, school bus, espresso, ...) with every listed model. Set io.input in Config to use your own image or folder.
+
+  - id: yolo26-object-detector
+    sample_images: scenes
+
+  - id: detr-object-detector
+    sample_images: scenes
+
+  - id: ssd-mobilenet-object-detector
+    sample_images: scenes
+
+  - id: depth-estimator
+    sample_images: scenes
+
+  - id: face-detector
+    sample_images: faces
+
+  - id: patchcore-anomaly-detector
+    note: The first run builds its memory bank from the bundled known-good images (--calibrate). To use your own, set calibration.nominal_images_dir in Config and delete the old bank in memory_bank.path.
+    before_first_run:              # runs again when these files are missing or older than the model
+      args: --calibrate
+      creates: [memory_bank.path, memory_bank.meta_path]
+      label: Building the memory bank from the known-good images (--calibrate, first run only)
+
+  - id: mipi-multi-model
+    needs: A MIPI CSI camera connected to the DevKit.
+
+  - id: parallel-apps
+    hidden: true                   # runs its apps in Docker containers, not as one binary
+
+  - id: pcie-high-density-multi-stream-object-detector
+    hidden: true                   # runs on a PCIe host, not on the board
+
+  - id: detection-to-vlm-assistant
+    hidden: true                   # its VLM model is not published yet (test-scope: huggingface, TBD)
+
+  - id: neat-genai-studio
+    link:
+      label: Open in Neat Studio Launcher
+      url: "https://{host}:8090/#/studio/genai"
+    note: Neat GenAI Studio is a full web studio; install and launch it from Neat Studio Launcher.

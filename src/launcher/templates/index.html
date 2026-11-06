@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Neat Apps Launcher</title>
+  <meta name="description" content="Every Neat example app on SiMa.ai Modalix: install, get models, run and watch it live in Insight, from one page.">
+  <link rel="icon" href="{{ url_for('static', filename='icons/neat-logo.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/neat-logo.png') }}">
+  <script>
+    // Apply the theme before first paint (same key as the studios use).
+    (function () {
+      try {
+        var t = localStorage.getItem('theme');
+        if (!t) t = 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+      // Launch animation: once per browser session, never with reduced motion.
+      try {
+        var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (reduce || sessionStorage.getItem('neatAppsIntroPlayed') === '1' || /[?&]nointro\b/.test(location.search)) {
+          document.documentElement.classList.add('no-intro');
+        }
+      } catch (e) { /* storage blocked: play it */ }
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ asset('launcher.css') }}">
+  <link rel="stylesheet" href="{{ asset('apps.css') }}">
+  <link rel="stylesheet" href="{{ asset('vendor/xterm.css') }}">
+</head>
+<body>
+  <div class="intro" id="intro" aria-hidden="true">
+    <canvas class="intro-stars" id="introStars"></canvas>
+    <div class="intro-burst"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="intro-chip-wrap"><div class="intro-trail"></div><img class="intro-chip" src="{{ url_for('static', filename='icons/mlsoc-modalix-m25.svg') }}" alt=""></div>
+    <div class="intro-brand">
+      <img src="{{ url_for('static', filename='icons/neat-mark.png') }}" alt="">
+      <div class="intro-title">Neat Apps Launcher</div>
+      <div class="intro-sub">{{ app_count }} Example Apps on SiMa.ai Modalix</div>
+      <div class="intro-cats">
+        {% for name, n in categories.items() %}
+        <span class="intro-cat" style="--i: {{ loop.index0 }}"><b>{{ n }}</b> {{ name|replace('-', ' ')|title }}</span>
+        {% endfor %}
+      </div>
+      <button class="btn spectrum lg intro-explore" type="button"><svg><use href="#i-play"/></svg>Explore the Apps</button>
+    </div>
+    <button class="intro-skip" id="introSkip" type="button">Skip</button>
+  </div>
+  <header class="app-header">
+    <a class="brand" href="#/">
+      <img class="app-brand-mark" src="{{ url_for('static', filename='icons/neat-mark.png') }}" alt="Neat">
+      <span class="brand-text">
+        <span class="app-header-title">Neat Apps Launcher</span>
+        <span class="app-header-sub">Example Apps on SiMa.ai Modalix</span>
+      </span>
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="#/" data-nav="home"><svg width="15" height="15"><use href="#i-grid"/></svg><span class="nav-label">Apps</span></a>
+      <a href="#/insight" data-nav="insight"><svg width="15" height="15"><use href="#i-eye"/></svg><span class="nav-label">Insight</span><i class="badge-dot ok hidden" id="navInsightDot" title="Insight is running"></i></a>
+      <a href="#/manager" data-nav="manager"><svg width="15" height="15"><use href="#i-sliders"/></svg><span class="nav-label">Manager</span><i class="badge-dot hidden" id="navUpdateDot" title="Updates available"></i></a>
+    </nav>
+    <div class="header-actions">
+      <div class="status-wrap">
+        <button class="status-strip" id="statusStrip" aria-haspopup="true" aria-expanded="false" title="Running Apps">
+          <span class="ss-text" id="statusText">Connecting…</span>
+          <svg class="ss-caret"><use href="#i-chevron"/></svg>
+        </button>
+        <div class="status-menu hidden" id="statusMenu" role="menu"></div>
+      </div>
+      <button class="header-icon-btn" data-replay-intro title="Replay Launch Animation" aria-label="Replay Launch Animation"><svg><use href="#i-rocket"/></svg></button>
+      <button class="header-icon-btn" id="fullscreenBtn" title="Full Screen" aria-label="Full Screen" aria-pressed="false"><svg><use href="#i-fs-enter"/></svg></button>
+      <button class="header-icon-btn" id="themeToggle" title="Toggle Light / Dark" aria-label="Toggle theme"><svg><use href="#i-moon"/></svg></button>
+      <img class="sima-logo js-themed-logo light-only" src="{{ url_for('static', filename='icons/logo_dark.png') }}" alt="SiMa.ai">
+      <img class="sima-logo js-themed-logo dark-only" src="{{ url_for('static', filename='icons/logo_bright.png') }}" alt="SiMa.ai">
+    </div>
+  </header>
+
+  <main>
+    <!-- ======================= Apps ======================= -->
+    <section class="page" id="page-home">
+      <div class="hero">
+        <div class="wrap hero-grid apps-hero">
+          <div>
+            <div class="eyebrow">SiMa.ai Modalix · Neat Example Apps</div>
+            <h1>{{ app_count }} Example Apps,<br><span class="grad">One Click Each.</span></h1>
+            <p class="lead">Every example from <a href="https://github.com/sima-neat/apps" target="_blank" rel="noopener">sima-neat/apps</a>: detection, segmentation, tracking, pose, depth, anomaly detection and benchmarks. The launcher installs the prebuilt apps, downloads each model when you need it, fills in the config, and streams the results live to Neat Insight.</p>
+            <div class="btn-row">
+              <a class="btn spectrum lg" href="#apps" id="exploreBtn"><svg><use href="#i-grid"/></svg>Browse the Apps</a>
+              <a class="btn lg" href="#/insight"><svg><use href="#i-eye"/></svg>Open Insight</a>
+            </div>
+            <div class="board-chips" id="boardChips"></div>
+          </div>
+          <div class="setup-card panel" id="setupCard"></div>
+        </div>
+      </div>
+
+      <div class="wrap section" style="padding-top:6px">
+        <div class="values">
+          <div class="value"><div class="v-icon"><svg><use href="#i-layers"/></svg></div><div class="v-num">{{ app_count }} Apps</div><div class="v-label">{{ categories|length }} Categories, C++ and Python, Straight From sima-neat/apps.</div></div>
+          <div class="value"><div class="v-icon"><svg><use href="#i-download"/></svg></div><div class="v-num">Auto Models</div><div class="v-label">Each App's Model Downloads the First Time You Run It.</div></div>
+          <div class="value"><div class="v-icon"><svg><use href="#i-eye"/></svg></div><div class="v-num">Live in Insight</div><div class="v-label">Sample Streams In, Boxes and Masks Out, Right in the Browser.</div></div>
+          <div class="value"><div class="v-icon"><svg><use href="#i-zap"/></svg></div><div class="v-num">On the MLA</div><div class="v-label">Every App Runs on the Modalix MLA. Nothing Leaves the Board.</div></div>
+        </div>
+      </div>
+
+      <div class="wrap section" id="apps">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Example Apps</div>
+            <h2>Pick an App. Watch It Run.</h2>
+            <div class="spectrum-rule"></div>
+          </div>
+          <div class="catalog-search">
+            <svg><use href="#i-search"/></svg>
+            <input id="search" type="search" placeholder="Search apps, models, tags…" autocomplete="off" aria-label="Search apps">
+          </div>
+        </div>
+        <div class="filters" id="filters"></div>
+        <div class="app-grid" id="appGrid"></div>
+        <div class="empty muted hidden" id="gridEmpty">No apps match. <a href="#" id="clearFilters">Clear the filters</a>.</div>
+      </div>
+
+      <div class="wrap">
+        <div class="footer">
+          <span>Neat Apps Launcher <span class="mono">v{{ version }}</span> · Catalog From sima-neat/apps <span class="mono">{{ (catalog.commit or '')[:7] }}</span> ({{ catalog.branch }}) · <a href="#" data-replay-intro>Replay Launch Animation</a></span>
+          <span id="footerHost"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ======================= App ======================= -->
+    <section class="page" id="page-app">
+      <div class="app-view" id="appView"></div>
+    </section>
+
+    <!-- ======================= Insight ======================= -->
+    <section class="page" id="page-insight">
+      <div class="app-view" id="insightView"></div>
+    </section>
+
+    <!-- ======================= Manager ======================= -->
+    <section class="page" id="page-manager">
+      <div class="wrap section">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Manager</div>
+            <h2>Apps, Processes and the Board</h2>
+            <div class="spectrum-rule"></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn sm" id="stopAllBtn"><svg><use href="#i-stop"/></svg>Stop All Apps</button>
+            <button class="btn sm" id="resetMlaBtn" title="Free every model on the MLA: stops the programs holding it (restarts simaai-appcomplex.service on firmware before 3.0)"><svg><use href="#i-cpu"/></svg>Reset MLA</button>
+          </div>
+        </div>
+        <div class="warn-banner" style="margin-bottom:18px"><svg><use href="#i-alert"/></svg><span>Manager Controls (Stop, Kill and the Shell) Are Open to Anyone Who Can Reach This Page. Use the Launcher on a Trusted Network Only.</span></div>
+        <div class="stats" id="stats"></div>
+      </div>
+
+      <div class="wrap section" style="padding-top:0">
+        <div class="section-head"><h3>Running &amp; Recent</h3></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>App</th><th>State</th><th>PID</th><th>CPU</th><th>Memory</th><th>Uptime</th><th style="text-align:right">Actions</th></tr></thead>
+            <tbody id="procTable"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="wrap section" style="padding-top:0">
+        <div class="section-head">
+          <h3>Platform &amp; Updates</h3>
+          <button class="btn sm" id="checkUpdatesBtn"><svg><use href="#i-refresh"/></svg>Check for Updates</button>
+        </div>
+        <div class="updates-list" id="updatesList"><div class="muted" style="font-size:13px">Not Checked Yet</div></div>
+      </div>
+
+      <div class="wrap section" style="padding-top:0">
+        <div class="section-head"><h3>Terminal</h3></div>
+        <div class="tabs" id="consoleTabs"></div>
+        <div class="console">
+          <div class="console-bar">
+            <span id="consoleLabel">Shell</span>
+            <span class="btn-row" id="consoleActions"></span>
+          </div>
+          <div class="xterm-host" id="consoleHost"></div>
+        </div>
+      </div>
+      <div class="wrap"><div class="footer"><span>Neat Apps Launcher <span class="mono">v{{ version }}</span></span><span id="footerHost2"></span></div></div>
+    </section>
+  </main>
+
+  <div class="toasts" id="toasts"></div>
+
+  <!-- Icons (lucide-style strokes) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-sparkle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z"/><path d="M19 17v4M17 19h4"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+      <symbol id="i-skull" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a8 8 0 0 0-5 14.2V20h10v-3.8A8 8 0 0 0 12 2z"/><circle cx="9" cy="11" r="1.4"/><circle cx="15" cy="11" r="1.4"/><path d="M10 20v-2M14 20v-2"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8M21 3v5h-5"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17l6-5-6-5M12 19h8"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+      <symbol id="i-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+      <symbol id="i-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l10 5-10 5L2 7zM2 17l10 5 10-5M2 12l10 5 10-5"/></symbol>
+      <symbol id="i-click" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9l5 12 1.8-5.2L21 14z"/><path d="M7.2 2.2L8 5.1M5.1 8L2.2 7.2M14 4.1L12 6.2M6.2 12l-2.1 2"/></symbol>
+      <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></symbol>
+      <symbol id="i-wifi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.6a10 10 0 0 1 14 0M8.5 16.1a5 5 0 0 1 7 0M2 8.8a15 15 0 0 1 20 0M12 20h.01"/></symbol>
+      <symbol id="i-temp" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z"/></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15zM20 17v5H6.5A2.5 2.5 0 0 1 4 19.5"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></symbol>
+      <symbol id="i-rocket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2.1-.1-2.9a2.2 2.2 0 0 0-2.9-.1z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.9A12.9 12.9 0 0 1 22 2c0 2.7-.8 7.5-6 11a22.4 22.4 0 0 1-4 2z"/><path d="M9 12H4s.6-3 2-4c1.6-1.1 5 0 5 0M12 15v5s3-.6 4-2c1.1-1.6 0-5 0-5"/></symbol>
+      <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
+      <symbol id="i-dots" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></symbol>
+      <symbol id="i-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="7" r="2.5"/><path d="M6 7.5v9M18 9.5c0 4-4 4.5-9.5 6.5"/></symbol>
+      <symbol id="i-fs-enter" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9V4a1 1 0 0 1 1-1h5M15 3h5a1 1 0 0 1 1 1v5M21 15v5a1 1 0 0 1-1 1h-5M9 21H4a1 1 0 0 1-1-1v-5"/></symbol>
+      <symbol id="i-fs-exit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5a1 1 0 0 1-1 1H3M21 9h-5a1 1 0 0 1-1-1V3M15 21v-5a1 1 0 0 1 1-1h5M3 15h5a1 1 0 0 1 1 1v5"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></symbol>
+      <symbol id="i-video" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M22 8l-6 4 6 4z"/></symbol>
+      <symbol id="i-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></symbol>
+      <symbol id="i-camera" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
+      <symbol id="i-gauge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/></symbol>
+      <symbol id="i-box" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.7z"/><path d="M3.3 7L12 12l8.7-5M12 22V12"/></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></symbol>
+    </defs>
+  </svg>
+
+  <script src="{{ asset('vendor/socket.io.min.js') }}"></script>
+  <script src="{{ asset('vendor/xterm.js') }}"></script>
+  <script src="{{ asset('vendor/addon-fit.js') }}"></script>
+  <script>window.LAUNCHER = { version: "{{ version }}", static: "{{ url_for('static', filename='') }}" };</script>
+  <script src="{{ asset('launcher.js') }}"></script>
+</body>
+</html>
