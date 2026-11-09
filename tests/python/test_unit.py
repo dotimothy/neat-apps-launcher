@@ -645,3 +645,55 @@ class PrerequisiteTests(unittest.TestCase):
             (self.b.root / ".sima-cli").mkdir()
             (self.b.root / ".sima-cli" / ".tokens.json").write_text("{}")
             self.assertTrue(bundle.Platform.signed_in()["present"])
+
+
+class StudioLauncherTests(unittest.TestCase):
+    """Neat Studio Launcher, from the setup card: found, its state, and installed or started."""
+    def setUp(self):
+        self.b = Board()
+        self.a, self.c, self.svc = self.b.app()
+        self.svc.s.studio_launcher_port = free_port()
+
+    def tearDown(self):
+        self.b.close(self.svc)
+
+    def test_not_installed_installed_running(self):
+        import subprocess, threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        p = self.svc.platform
+        st = p.studio_launcher()
+        self.assertEqual((st["installed"], st["running"]), (False, False))
+        d = self.svc.s.install_root / "neat-studio-launcher"
+        d.mkdir()
+        (d / "run.sh").write_text("#!/bin/sh\n")
+        p.forget()
+        self.assertEqual((p.studio_launcher()["installed"], p.studio_launcher()["running"]), (True, False))
+
+        class Health(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps({"ok": True, "app": "neat-studio-launcher", "version": "0.2.0"}).encode()
+                self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        srv = HTTPServer(("127.0.0.1", self.svc.s.studio_launcher_port), Health)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            p.forget()
+            st = self.c.get("/api/platform?force=1").json["studio_launcher"]
+            self.assertEqual((st["installed"], st["running"], st["version"]), (True, True, "0.2.0"))
+        finally:
+            srv.shutdown()
+        for script in (p.studio_launcher_install_script(), p.studio_launcher_start_script()):
+            self.assertEqual(subprocess.run(["bash", "-n"], input=script, text=True).returncode, 0)
+        self.assertIn("STUDIO_START=1", p.studio_launcher_install_script())
+        self.assertIn(f"--port {self.svc.s.studio_launcher_port}", p.studio_launcher_start_script())
+
+    def test_install_action(self):
+        from unittest import mock
+        with mock.patch.object(self.svc.platform, "studio_launcher_install_script", return_value='echo "▸ fake install"\n'):
+            self.assertTrue(self.c.post("/api/platform/install", json={"what": "studio-launcher"}).json["ok"])
+            self.assertTrue(wait(lambda: self.svc.mgr.rt["platform"].job and self.svc.mgr.rt["platform"].job.done, 20))
+        self.assertEqual(self.svc.mgr.rt["platform"].job.code, 0)
+        self.assertIn("fake install", (self.b.root / "logs" / "platform-job.log").read_text())
