@@ -143,6 +143,20 @@ class Launcher:
                          if self.s.install_root.is_dir() else Path.home(), after=after,
                          title="Upgrade apps bundle" if upgrade else "Set up everything")
 
+    def install(self, what: str) -> None:
+        """One prerequisite on its own: sima-cli, Neat Core, or the ~/pyneat link."""
+        scripts = {"sima-cli": (self.platform.sima_cli_script, "Install sima-cli"),
+                   "core": (self.platform.core_script, "Install Neat Core"),
+                   "pyneat": (self.platform.pyneat_link_script, "Link the pyneat environment")}
+        if what not in scripts:
+            raise RuntimeError(f"nothing called {what!r} to install")
+        make, title = scripts[what]
+
+        def after(code: int) -> None:
+            self.platform.forget()
+            self._pstatus = (0.0, {})
+        self.mgr.run_job("platform", what, make(), Path.home(), after=after, title=title)
+
     def fetch_samples(self) -> None:
         self.mgr.run_job("platform", "samples", self.insight.fetch_samples_script() + self.images.fetch_script(),
                          Path.home(), title="Get sample videos and images")

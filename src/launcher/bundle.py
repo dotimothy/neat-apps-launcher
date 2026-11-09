@@ -1,6 +1,7 @@
-"""The platform under the apps: sima-cli, the prebuilt apps bundle, Core,
-Insight and the pyneat Python environment. Reports what is there and builds
-the shell steps that install what is missing.
+"""The platform under the apps: the board's firmware, sima-cli, the prebuilt
+apps bundle, Neat Core, Insight, the pyneat Python environment and the
+Developer Portal sign-in. Reports what is there and builds the shell steps
+that install what is missing.
 
 The bundle is what `sima-cli neat install apps` installs: prebuilt C++
 binaries and Python sources in <install_root>/prebuilt-apps, plus the
@@ -10,6 +11,7 @@ models/ and backs up the rest to .prebuilt-apps-backup/.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -17,11 +19,34 @@ import threading
 import time
 import urllib.request
 
+from pathlib import Path
+
 from insight import Insight
 from registry import Settings
 
 # Where `sima-cli neat install apps` resolves "latest" (sima_cli/vulcan/artifacts.py).
 APPS_ARTIFACTS = "https://artifacts.neat.sima.ai/apps"
+# The official sima-cli installer (docs.sima.ai); on a DevKit it installs into /data/sima-cli.
+SIMA_CLI_INSTALLER = "https://artifacts.neat.sima.ai/sima-cli/linux-mac.sh"
+BUILDINFO = Path("/etc/buildinfo")
+NVME_PYNEAT = Path("/media/nvme/pyneat")      # where Neat Core's installer puts the venv on a DevKit
+
+
+def version_tuple(v: str) -> tuple[int, ...]:
+    """'3.0.0_master_B2501' -> (3, 0, 0); 'v0.6.0+main.88bf' -> (0, 6, 0)."""
+    m = re.match(r"v?(\d+(?:\.\d+)*)", (v or "").strip())
+    return tuple(int(x) for x in m.group(1).split(".")) if m else ()
+
+
+def firmware_version(path: Path = BUILDINFO) -> str:
+    """The board's platform build, e.g. '3.0.0' (from SIMA_BUILD_VERSION = 3.0.0_master_B2501)."""
+    try:
+        for line in path.read_text().splitlines():
+            if line.startswith("SIMA_BUILD_VERSION"):
+                return line.split("=", 1)[1].strip().split("_", 1)[0]
+    except OSError:
+        pass
+    return ""
 
 
 def _run(cmd: list[str], timeout: float = 20.0) -> str:
@@ -84,11 +109,38 @@ class Platform:
                 "core_ref": core.get("ref", ""), "apps": n}
 
     def core(self) -> dict:
+        """Neat Core (the sima-neat package), and whether it is the one the bundle
+        was built for (deps/neat-core.json in the bundle names it)."""
         def ver():
-            out = _run(["dpkg-query", "-W", "-f=${Version}", "sima-neat"])
+            out = _run(shlex.split(self.s.core_query))
             return out.strip() if out and "no packages" not in out.lower() else ""
         v = self._cached("core-ver", 300, ver)
-        return {"present": bool(v), "version": v}
+        wanted = self.bundle().get("core_ref", "")
+        want = version_tuple(wanted)
+        have = version_tuple(v)
+        matches = not want or have[:len(want)] == want
+        return {"present": bool(v), "version": v, "wanted": wanted.lstrip("v") if want else "",
+                "ok": bool(v) and matches}
+
+    def firmware(self) -> dict:
+        """The board's platform build against what the apps need: the model zoo's
+        major.minor (3.0 for model zoo 3.0.0), or platform_version in apps.yaml."""
+        v = firmware_version()
+        need = self.required_platform()
+        ok = not need or not v or version_tuple(v)[:2] >= version_tuple(need)[:2]
+        return {"version": v, "required": need, "ok": ok}
+
+    def required_platform(self) -> str:
+        if self.s.platform_version:
+            return str(self.s.platform_version)
+        parts = version_tuple(self.s.modelzoo_version)
+        return ".".join(map(str, parts[:2])) if len(parts) >= 2 else ""
+
+    @staticmethod
+    def signed_in() -> dict:
+        """Signed in to the Developer Portal with sima-cli (models download through it).
+        sima-cli keeps its tokens in ~/.sima-cli and refreshes them itself."""
+        return {"present": (Path.home() / ".sima-cli" / ".tokens.json").is_file()}
 
     def latest(self) -> dict:
         """The newest published bundle for our branch (cached 15 min)."""
@@ -110,8 +162,13 @@ class Platform:
         return {"present": bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))}
 
     def pyneat(self) -> dict:
+        """The Python environment with pyneat. Neat Core's installer makes it at
+        /media/nvme/pyneat and links ~/pyneat to it; without the link it can be
+        relinked (`linkable`), otherwise installing Core makes it."""
         py = self.s.pyneat / "bin" / "python"
-        return {"present": py.exists(), "path": str(self.s.pyneat)}
+        linkable = (not py.exists() and not os.path.lexists(self.s.pyneat)
+                    and (NVME_PYNEAT / "bin" / "python").exists())
+        return {"present": py.exists(), "path": str(self.s.pyneat), "linkable": linkable}
 
     def status(self) -> dict:
         b = self.bundle()
@@ -121,15 +178,18 @@ class Platform:
         insight = {"present": self.insight.installed(), "version": self.insight.version(),
                    "port": self.s.insight_port, "scheme": self.insight.scheme}
         cli = self.sima_cli()
+        fw = self.firmware()
+        core = self.core()
         samples = {"cached": self.insight.cached_samples(), "total": self.insight.sample_count(),
                    "images_cached": self.images.cached() if self.images else 0,
                    "images_total": self.images.total() if self.images else 0}
         return {
             "sima_cli": cli, "bundle": {**b, "latest": tag, "latest_error": latest.get("error", ""),
                                          "update": update, "branch": self.s.bundle_branch},
-            "core": self.core(), "insight": insight, "pyneat": self.pyneat(), "samples": samples,
-            "ffmpeg": self.ffmpeg(),
-            "ready": bool(cli["present"] and b["present"] and insight["present"] and self.ffmpeg()["present"]),
+            "core": core, "insight": insight, "pyneat": self.pyneat(), "samples": samples,
+            "ffmpeg": self.ffmpeg(), "firmware": fw, "signin": self.signed_in(),
+            "ready": bool(fw["ok"] and cli["present"] and b["present"] and core["ok"]
+                          and insight["present"] and self.ffmpeg()["present"]),
             "install_root": str(self.s.install_root),
             "catalog": self.s.catalog_source, "modelzoo_version": self.s.modelzoo_version,
         }
@@ -158,6 +218,59 @@ class Platform:
                 f'{{ echo "✘ The bundle was not found in {self.s.bundle} after installing"; exit 5; }}\n'
                 f'echo "✔ Apps bundle installed in {self.s.bundle}"\n')
 
+    @staticmethod
+    def sima_cli_script() -> str:
+        """sima-cli itself, with the official installer (into /data/sima-cli on a DevKit)."""
+        return ('echo "▸ Installing sima-cli"\n'
+                f"curl -fsSL {SIMA_CLI_INSTALLER} | bash -s < /dev/null\n"
+                'echo "✔ sima-cli installed"\n')
+
+    def core_script(self) -> str:
+        """Neat Core: its runtime packages and the pyneat venv, as the apps' own installer
+        does it (`sima-cli neat install -t minimal core`). The installer uses sudo, with
+        SUDO_PASSWORD / DEVKIT_PASSWORD or the DevKit's default password."""
+        return ('echo "▸ Installing Neat Core (runtime packages and the pyneat Python environment)"\n'
+                'tmp=$(mktemp -d)\n'
+                'rc=0\n'
+                f'( cd "$tmp" && {self._cli()} neat install -d . -t minimal core ) || rc=$?\n'
+                'rm -rf "$tmp"\n'
+                '[ $rc -eq 0 ] || { echo "✘ Neat Core did not install (exit $rc)"; exit 5; }\n'
+                f'echo "✔ Neat Core $({self._core_query_sh()}) installed"\n'
+                + self.pyneat_link_script())
+
+    def _core_query_sh(self) -> str:
+        return f"{self.s.core_query} 2>/dev/null"
+
+    def pyneat_link_script(self) -> str:
+        home = shlex.quote(str(self.s.pyneat))
+        nvme = shlex.quote(str(NVME_PYNEAT))
+        return (f'if [ ! -e {home} ] && [ -x {nvme}/bin/python ]; then\n'
+                f'  ln -s {nvme} {home} && echo "✔ Linked {self.s.pyneat} to {NVME_PYNEAT}"\n'
+                'fi\n')
+
+    def core_step_script(self) -> str:
+        """In Set Up Everything, after the bundle: install Core when it is missing or is
+        not the one the bundle names (the check runs then, against the new bundle)."""
+        deps = shlex.quote(str(self.s.bundle / "deps" / "neat-core.json"))
+        return (f'want=$(python3 -c \'import json,sys; print((json.load(open(sys.argv[1])).get("neat-core") or {{}}).get("ref","").lstrip("v"))\' {deps} 2>/dev/null)\n'
+                f'have=$({self._core_query_sh()})\n'
+                'case "$want" in [0-9]*) ;; *) want="" ;; esac\n'
+                'if [ -n "$have" ] && { [ -z "$want" ] || [ "${have#"$want"}" != "$have" ]; }; then\n'
+                '  echo "✔ Neat Core $have already installed"\n'
+                + "".join("  " + line + "\n" for line in self.pyneat_link_script().splitlines()) +
+                'else\n'
+                '  [ -n "$have" ] && echo "▸ Neat Core $have is installed; the bundle is built for ${want}"\n'
+                + "".join("  " + line + "\n" for line in self.core_script().splitlines()) +
+                'fi\n')
+
+    def firmware_gate_script(self) -> str:
+        fw = self.firmware()
+        if fw["ok"]:
+            return ""
+        return (f'echo "✘ The board runs platform {fw["version"]}; these apps need {fw["required"]} or newer."\n'
+                'echo "  Update the firmware with: sima-cli update   (in the Shell; the board reboots), then run setup again."\n'
+                'exit 7\n')
+
     def insight_script(self) -> str:
         return ('echo "▸ Installing Neat Insight"\n'
                 'tmp=$(mktemp -d)\n'
@@ -169,11 +282,12 @@ class Platform:
 
     def setup_script(self, upgrade: bool = False) -> str:
         """Everything an out-of-box run needs, skipping what is there."""
-        parts = []
+        parts = [self.firmware_gate_script()]
         if not self.bundle()["present"] or upgrade:
             parts.append(self.bundle_script())
         else:
             parts.append(f'echo "✔ Apps bundle already in {self.s.bundle}"\n')
+        parts.append(self.core_step_script())
         # The bundle install normally brings Insight too; check when the step runs.
         parts.append(f'if [ ! -x {shlex.quote(str(self.insight.binary))} ]; then\n'
                      + self.insight_script()

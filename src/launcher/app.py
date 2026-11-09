@@ -210,6 +210,8 @@ def create_app(settings=None, apps=None, logs_dir=None, cache_dir=None, runs_dir
                 svc.setup_all(upgrade=bool(body.get("upgrade")))
             elif action == "samples":
                 svc.fetch_samples()
+            elif action == "install":
+                svc.install(str(body.get("what", "")))
             elif action == "cancel":
                 mgr.cancel_job("platform")
             elif action == "dismiss":

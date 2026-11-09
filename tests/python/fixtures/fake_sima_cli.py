@@ -39,5 +39,9 @@ if argv[:2] == ["neat", "install"]:
     if target.startswith("insight"):
         print("insight installed")
         sys.exit(0)
+    if target.startswith("core"):                     # Neat Core: what the fake board's core_query reads
+        (board / "core-version").write_text("0.5.0+fake\n")
+        print("core installed")
+        sys.exit(0)
 print(f"fake sima-cli: unsupported {argv}")
 sys.exit(2)

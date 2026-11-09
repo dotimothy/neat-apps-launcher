@@ -66,6 +66,8 @@ def build(root: Path, catalog: dict, apps_repo: Path | None = None, installed: b
     (tpl / "deps" / "neat-core.json").write_text(json.dumps({"neat-core": {"ref": "v0.5.0", "spec": "fake"}}))
     if installed:
         shutil.copytree(tpl, root / "prebuilt-apps", dirs_exist_ok=True, symlinks=True)
+        (root / "core-version").write_text("0.5.0+fake\n")       # an installed board has Neat Core
+    _exe(root / "bin" / "core-version", f"#!/bin/sh\ncat {str(root / 'core-version')!r} 2>/dev/null || true\n")
     _exe(root / "bin" / "sima-cli", f"#!/bin/sh\nFAKE_BOARD={str(root)!r} exec {py} {str(HERE / 'fake_sima_cli.py')!r} \"$@\"\n")
     _exe(root / "insight-venv" / "bin" / "neat-insight", f"#!/bin/sh\nexec {py} {str(HERE / 'fake_insight.py')!r} \"$@\"\n")
     (root / "pyneat" / "bin").mkdir(parents=True, exist_ok=True)
@@ -83,6 +85,7 @@ def build(root: Path, catalog: dict, apps_repo: Path | None = None, installed: b
                    f"    files: [one.jpg, two.JPEG]\n" for s in ("scenes", "faces", "imagenet"))
     (root / "config.local.yaml").write_text(
         f"install_root: {root}\nsima_cli: {root / 'bin' / 'sima-cli'}\npyneat: {root / 'pyneat'}\n"
+        f"core_query: {root / 'bin' / 'core-version'}\n"
         f"insight:\n  port: {insight_port}\n  scheme: http\n  venv: {root / 'insight-venv'}\n"
         f"  samples: file://{samples}/video{{n:02d}}.mp4\n  sample_count: 4\n"
         f"sample_images:\n{sets}")

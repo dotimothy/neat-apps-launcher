@@ -33,8 +33,18 @@
 
 The examples in `sima-neat/apps` each need several manual steps before they run: install the apps bundle, download the model from the Developer Portal, replace the placeholders in `config.yaml` (`<model-path>`, `<rtsp-url-1>`, `<insight-host-ip>`), start Insight, set up an RTSP source in Insight, then start the binary. The launcher does all of it.
 
+- **Board Setup** checks what the apps need, and fixes what it can from the page:
+
+  | Prerequisite | Checked | When it's missing |
+  |---|---|---|
+  | Firmware | the platform build in `/etc/buildinfo`, against the model zoo's version (3.0 for model zoo 3.0.0; `platform_version` in `apps.yaml` overrides it) | **Update Firmware…** explains, then types `sima-cli update` into the Shell for you to start: it flashes and reboots the board. Set Up Everything stops until the firmware is new enough. |
+  | sima-cli | `sima_cli` in `apps.yaml`, else `PATH` | **Install** runs SiMa.ai's installer (into `/data/sima-cli`) |
+  | Developer Portal | sima-cli's sign-in (`~/.sima-cli`), needed to download models | **Sign In** runs `sima-cli login` in the Shell: open the link and enter the code |
+  | Neat Core | the `sima-neat` package, against the Core the bundle was built for (`deps/neat-core.json`) | **Install Neat Core** (`sima-cli neat install -t minimal core`, also the pyneat environment); Set Up Everything does it when needed |
+  | pyneat | `~/pyneat`, for the Python versions | **Link It** when the environment is already in `/media/nvme/pyneat`; otherwise Neat Core brings it |
 - **Set Up Everything** (one button) installs what is missing:
   - the prebuilt apps bundle with `sima-cli neat install apps`, which also brings the matching Neat Core and Neat Insight
+  - Neat Core, when it is missing or not the version the bundle was built for
   - `ffmpeg`, which Insight uses to stream videos (from the board's apt, with passwordless sudo)
   - 16 sample videos (720p, H.264) for the streaming apps
 - **A catalog** of every app: search, plus category, input (image folder, live stream, multi-stream, video, camera) and language filters. Cards show the app's preview, model and state.
