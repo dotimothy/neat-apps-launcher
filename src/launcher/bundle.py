@@ -28,6 +28,9 @@ from registry import Settings
 APPS_ARTIFACTS = "https://artifacts.neat.sima.ai/apps"
 # The official sima-cli installer (docs.sima.ai); on a DevKit it installs into /data/sima-cli.
 SIMA_CLI_INSTALLER = "https://artifacts.neat.sima.ai/sima-cli/linux-mac.sh"
+# Neat Studio Launcher, the home of the full studios (GenAI, Decision, Change, DINO).
+STUDIO_LAUNCHER_INSTALLER = "https://raw.githubusercontent.com/dotimothy/neat-studio-launcher/main/install.sh"
+STUDIO_LAUNCHER_DIR = "neat-studio-launcher"        # in install_root
 BUILDINFO = Path("/etc/buildinfo")
 NVME_PYNEAT = Path("/media/nvme/pyneat")      # where Neat Core's installer puts the venv on a DevKit
 
@@ -136,6 +139,40 @@ class Platform:
         parts = version_tuple(self.s.modelzoo_version)
         return ".".join(map(str, parts[:2])) if len(parts) >= 2 else ""
 
+    def studio_launcher(self) -> dict:
+        """Neat Studio Launcher: installed next to the bundle, and answering on its port."""
+        d = self.s.install_root / STUDIO_LAUNCHER_DIR
+        port = self.s.studio_launcher_port
+
+        def probe():
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE   # its certificate is self-signed
+            for scheme in ("https", "http"):
+                try:
+                    with urllib.request.urlopen(f"{scheme}://127.0.0.1:{port}/health", timeout=1.5,
+                                                context=ctx if scheme == "https" else None) as r:
+                        body = json.loads(r.read() or b"{}")
+                    if body.get("app") == "neat-studio-launcher":
+                        return {"running": True, "version": str(body.get("version", ""))}
+                except Exception:                                  # noqa: BLE001
+                    continue
+            return {"running": False, "version": ""}
+        state = self._cached("studio-launcher", 10, probe)
+        return {"installed": (d / "run.sh").is_file(), "dir": str(d), "port": port, **state}
+
+    def studio_launcher_install_script(self) -> str:
+        root = shlex.quote(str(self.s.install_root))
+        return ('echo "▸ Installing Neat Studio Launcher"\n'
+                f"cd {root}\n"
+                f"curl -fsSL {STUDIO_LAUNCHER_INSTALLER} | STUDIO_START=1 STUDIO_DIR={STUDIO_LAUNCHER_DIR} bash < /dev/null\n"
+                f'echo "✔ Neat Studio Launcher: https://<board>:{self.s.studio_launcher_port}/"\n')
+
+    def studio_launcher_start_script(self) -> str:
+        d = shlex.quote(str(self.s.install_root / STUDIO_LAUNCHER_DIR))
+        return ('echo "▸ Starting Neat Studio Launcher"\n'
+                f"{d}/run.sh --daemon --port {int(self.s.studio_launcher_port)}\n")
+
     @staticmethod
     def signed_in() -> dict:
         """Signed in to the Developer Portal with sima-cli (models download through it).
@@ -188,6 +225,7 @@ class Platform:
                                          "update": update, "branch": self.s.bundle_branch},
             "core": core, "insight": insight, "pyneat": self.pyneat(), "samples": samples,
             "ffmpeg": self.ffmpeg(), "firmware": fw, "signin": self.signed_in(),
+            "studio_launcher": self.studio_launcher(),
             "ready": bool(fw["ok"] and cli["present"] and b["present"] and core["ok"]
                           and insight["present"] and self.ffmpeg()["present"]),
             "install_root": str(self.s.install_root),

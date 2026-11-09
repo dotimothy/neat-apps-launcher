@@ -42,6 +42,7 @@ The examples in `sima-neat/apps` each need several manual steps before they run:
   | Developer Portal | sima-cli's sign-in (`~/.sima-cli`), needed to download models | **Sign In** runs `sima-cli login` in the Shell: open the link and enter the code |
   | Neat Core | the `sima-neat` package, against the Core the bundle was built for (`deps/neat-core.json`) | **Install Neat Core** (`sima-cli neat install -t minimal core`, also the pyneat environment); Set Up Everything does it when needed |
   | pyneat | `~/pyneat`, for the Python versions | **Link It** when the environment is already in `/media/nvme/pyneat`; otherwise Neat Core brings it |
+  | Neat Studio Launcher (optional) | installed in `/media/nvme/neat-studio-launcher`, and answering on port 8090 (`studio_launcher_port`) | **Install** runs its installer and starts it; **Start** starts it. Neat GenAI Studio's card does either when needed, then offers to open the studio. |
 - **Set Up Everything** (one button) installs what is missing:
   - the prebuilt apps bundle with `sima-cli neat install apps`, which also brings the matching Neat Core and Neat Insight
   - Neat Core, when it is missing or not the version the bundle was built for

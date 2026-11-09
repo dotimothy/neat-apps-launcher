@@ -144,10 +144,12 @@ class Launcher:
                          title="Upgrade apps bundle" if upgrade else "Set up everything")
 
     def install(self, what: str) -> None:
-        """One prerequisite on its own: sima-cli, Neat Core, or the ~/pyneat link."""
+        """One piece on its own: sima-cli, Neat Core, the ~/pyneat link, or Neat Studio Launcher."""
         scripts = {"sima-cli": (self.platform.sima_cli_script, "Install sima-cli"),
                    "core": (self.platform.core_script, "Install Neat Core"),
-                   "pyneat": (self.platform.pyneat_link_script, "Link the pyneat environment")}
+                   "pyneat": (self.platform.pyneat_link_script, "Link the pyneat environment"),
+                   "studio-launcher": (self.platform.studio_launcher_install_script, "Install Neat Studio Launcher"),
+                   "studio-launcher-start": (self.platform.studio_launcher_start_script, "Start Neat Studio Launcher")}
         if what not in scripts:
             raise RuntimeError(f"nothing called {what!r} to install")
         make, title = scripts[what]

@@ -404,7 +404,7 @@
   async function runApp(id) {
     const a = state.apps[id];
     if (!a) return;
-    if (a.link && a.link.url) { window.open(a.link.url.replace("{host}", location.hostname), "_blank", "noopener"); return; }
+    if (a.link && a.link.url) { openLink(a); return; }
     if (!state.platform || !state.platform.bundle.present) {
       const go = await modal({
         title: "Set Up the Board First",
@@ -494,6 +494,31 @@
     }
   });
 
+  // A link to Neat Studio Launcher (Neat GenAI Studio's card): install or start it first when needed.
+  const studioURL = (sl, path) => `https://${location.hostname}:${sl.port}/${path || ""}`;
+  async function openLink(a) {
+    const url = a.link.url.replace("{host}", location.hostname);
+    const sl = state.platform && state.platform.studio_launcher;
+    if (!sl || !url.includes(`:${sl.port}/`) || sl.running) { window.open(url, "_blank", "noopener"); return; }
+    if (!sl.installed) { installPrereq("studio-launcher"); return; }
+    if (!(await post("/api/platform/install", { what: "studio-launcher-start" }))) return;
+    toast("Starting Neat Studio Launcher…", "info");
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const p = await api("/api/platform?force=1").catch(() => null);
+      if (p && p.studio_launcher && p.studio_launcher.running) {
+        // A tab opened from this click (browsers allow it); one opened earlier and pointed here
+        // later is not reliably navigable.
+        const go = await modal({ title: "Neat Studio Launcher Is Running",
+          body: `<p>${esc(a.name)} opens in Neat Studio Launcher, in a new tab.</p>`,
+          actions: [{ label: "Not Now", value: false, cls: "ghost" }, { label: `Open ${esc(a.name)}`, value: true, cls: "primary solid" }] });
+        if (go) window.open(url, "_blank", "noopener");
+        return;
+      }
+    }
+    toast("Neat Studio Launcher did not start: see the Setup log", "err");
+  }
+
   // ------------------------------------------------------------------ home: prerequisites
   // A command typed into the Manager's shell: run (enter) or left for the user to check and run.
   function runInShell(cmd, enter) {
@@ -512,9 +537,14 @@
   const PREREQ = {
     "sima-cli": { title: "Install sima-cli?", body: "<p>Runs SiMa.ai's installer (<span class=\"mono\">artifacts.neat.sima.ai/sima-cli/linux-mac.sh</span>), which installs sima-cli into <span class=\"mono\">/data/sima-cli</span> on the board. It may install python3-venv with sudo.</p>", go: "Install sima-cli" },
     core: { title: "Install Neat Core?", body: "<p>Installs Neat Core's runtime packages with sudo and the pyneat Python environment, with <span class=\"mono\">sima-cli neat install core</span>. It takes a few minutes. Stop running apps first: the runtime they use is replaced.</p>", go: "Install Neat Core" },
+    "studio-launcher": { title: "Install Neat Studio Launcher?", body: "<p>Neat Studio Launcher is the home of the full studios: Neat GenAI Studio, Decision, Change and DINO, each installed and launched with one click. This runs its installer into <span class=\"mono\">/media/nvme/neat-studio-launcher</span> (it adds the <span class=\"mono\">neat-studio</span> command and a desktop icon) and starts it next to this launcher.</p>", go: "Install" },
     pyneat: { title: "Link pyneat?", body: "<p>Neat Core's Python environment is at <span class=\"mono\">/media/nvme/pyneat</span>; this links <span class=\"mono\">~/pyneat</span> to it, where the Python apps look.</p>", go: "Link It" },
   };
   async function installPrereq(what) {
+    if (what === "studio-launcher-start") {
+      if (await post("/api/platform/install", { what })) toast("Starting Neat Studio Launcher", "info");
+      return;
+    }
     const d = PREREQ[what];
     if (!d) return;
     const ok = await modal({ title: d.title, body: d.body, actions: [{ label: "Cancel", value: false, cls: "ghost" }, { label: d.go, value: true, cls: "primary solid" }] });
@@ -559,6 +589,13 @@
       check(p.ffmpeg && p.ffmpeg.present, "ffmpeg", p.ffmpeg && p.ffmpeg.present ? "Insight streams the samples with it" : "Needed to stream the sample videos (installed by setup)"),
       check(p.samples.cached >= p.samples.total, "Sample Videos", `${p.samples.cached} of ${p.samples.total} for the streaming apps`),
       ...(p.samples.images_total ? [check(p.samples.images_cached >= p.samples.images_total, "Sample Images", `${p.samples.images_cached} of ${p.samples.images_total} for the image apps (or fetched on first run)`, p.samples.images_cached < p.samples.images_total)] : []),
+      ...(p.studio_launcher ? [(() => {
+        const sl = p.studio_launcher;
+        return check(sl.running, "Neat Studio Launcher", sl.running
+          ? `Running${sl.version ? ` · v${esc(sl.version)}` : ""} · <a href="${studioURL(sl)}" target="_blank" rel="noopener">Open</a>`
+          : sl.installed ? `Installed, not running${link("install:studio-launcher-start", "Start")}`
+          : `Optional: GenAI, Decision, Change and DINO studios${link("install:studio-launcher", "Install")}`, true);
+      })()] : []),
     ].join("");
     const ready = p.ready && p.samples.cached > 0;
     let foot;
