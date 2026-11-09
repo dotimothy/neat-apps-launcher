@@ -551,3 +551,97 @@ class SampleImageTests(unittest.TestCase):
         cfg = (self.b.root / "runs" / "folder-app" / "config.yaml").read_text()
         self.assertIn(str(self.b.root / "cache" / "images" / "scenes"), cfg)
         self.assertEqual(len(self.c.get("/api/apps/folder-app/outputs").json["images"]), 2)
+
+
+class PrerequisiteTests(unittest.TestCase):
+    """Firmware, Neat Core, pyneat and the Developer Portal sign-in: checked, and installed where
+    the launcher can do it."""
+    def setUp(self):
+        self.b = Board(installed=False)
+        self.a, self.c, self.svc = self.b.app()
+        (self.b.root / "core-version").unlink(missing_ok=True)
+
+    def tearDown(self):
+        self.b.close(self.svc)
+
+    def status(self):
+        return self.c.get("/api/platform?force=1").json
+
+    def wait_job(self):
+        self.assertTrue(wait(lambda: self.svc.mgr.rt["platform"].job and self.svc.mgr.rt["platform"].job.done, 30))
+        return self.svc.mgr.rt["platform"].job.code, (self.b.root / "logs" / "platform-job.log").read_text()
+
+    def test_versions(self):
+        import bundle
+        self.assertEqual(bundle.version_tuple("3.0.0_master_B2501"), (3, 0, 0))
+        self.assertEqual(bundle.version_tuple("v0.6.0+main.88bf"), (0, 6, 0))
+        self.assertEqual(bundle.version_tuple("main"), ())
+        info = self.b.root / "buildinfo"
+        info.write_text("MACHINE = modalix\nSIMA_BUILD_VERSION = 2.1.3_master_B4837\n")
+        self.assertEqual(bundle.firmware_version(info), "2.1.3")
+        self.assertEqual(bundle.firmware_version(self.b.root / "missing"), "")
+
+    def test_old_firmware_stops_setup_with_the_way_out(self):
+        from unittest import mock
+        import bundle
+        self.svc.s.platform_version = "3.0"
+        with mock.patch.object(bundle, "firmware_version", return_value="2.1.3"):
+            fw = self.status()["firmware"]
+            self.assertEqual((fw["version"], fw["required"], fw["ok"]), ("2.1.3", "3.0", False))
+            self.assertFalse(self.status()["ready"])
+            self.c.post("/api/platform/setup", json={})
+            code, log = self.wait_job()
+        self.assertEqual(code, 7, log)
+        self.assertIn("sima-cli update", log)
+        self.assertFalse((self.b.root / "prebuilt-apps" / "examples").exists())    # nothing installed
+
+    def test_setup_installs_core_when_missing(self):
+        st = self.status()
+        self.assertEqual((st["core"]["present"], st["core"]["ok"]), (False, False))
+        self.c.post("/api/platform/setup", json={})
+        code, log = self.wait_job()
+        self.assertEqual(code, 0, log)
+        self.assertIn("Installing Neat Core", log)
+        core = self.status()["core"]
+        self.assertEqual((core["version"], core["wanted"], core["ok"]), ("0.5.0+fake", "0.5.0", True))
+
+    def test_core_that_does_not_match_the_bundle(self):
+        self.c.post("/api/platform/setup", json={})
+        self.wait_job()
+        (self.b.root / "core-version").write_text("0.4.0\n")
+        self.svc.platform.forget()
+        core = self.status()["core"]
+        self.assertEqual((core["present"], core["ok"], core["wanted"]), (True, False, "0.5.0"))
+        self.assertFalse(self.status()["ready"])
+        self.assertTrue(self.c.post("/api/platform/install", json={"what": "core"}).json["ok"])
+        code, log = self.wait_job()
+        self.assertEqual(code, 0, log)
+        self.assertTrue(self.status()["core"]["ok"])
+        self.assertEqual(self.c.post("/api/platform/install", json={"what": "rm -rf"}).status_code, 409)
+
+    def test_pyneat_link(self):
+        import subprocess
+        from unittest import mock
+        import bundle
+        nvme = self.b.root / "nvme-pyneat"
+        (nvme / "bin").mkdir(parents=True)
+        os.symlink(sys.executable, nvme / "bin" / "python")
+        home = self.svc.s.pyneat
+        import shutil
+        shutil.rmtree(home)
+        with mock.patch.object(bundle, "NVME_PYNEAT", nvme):
+            p = self.svc.platform.pyneat()
+            self.assertEqual((p["present"], p["linkable"]), (False, True))
+            r = subprocess.run(["bash", "-c", self.svc.platform.pyneat_link_script()], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(os.readlink(home), str(nvme))
+            self.assertTrue(self.svc.platform.pyneat()["present"])
+
+    def test_signed_in(self):
+        from unittest import mock
+        import bundle
+        with mock.patch.object(bundle.Path, "home", return_value=self.b.root):
+            self.assertFalse(bundle.Platform.signed_in()["present"])
+            (self.b.root / ".sima-cli").mkdir()
+            (self.b.root / ".sima-cli" / ".tokens.json").write_text("{}")
+            self.assertTrue(bundle.Platform.signed_in()["present"])

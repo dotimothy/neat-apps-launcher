@@ -478,6 +478,9 @@
       case "setup": setupAll(false); break;
       case "upgrade": setupAll(true); break;
       case "samples": post("/api/platform/samples"); break;
+      case "install": installPrereq(id); break;
+      case "signin": signIn(); break;
+      case "firmware": updateFirmware(); break;
       case "platform-cancel": post("/api/platform/cancel"); break;
       case "platform-dismiss": post("/api/platform/dismiss"); break;
       case "insight-start": post("/api/insight/start").then((r) => r && toast("Starting Neat Insight", "info")); break;
@@ -491,6 +494,44 @@
     }
   });
 
+  // ------------------------------------------------------------------ home: prerequisites
+  // A command typed into the Manager's shell: run (enter) or left for the user to check and run.
+  function runInShell(cmd, enter) {
+    location.hash = "#/manager";
+    setTimeout(() => selectConsole("shell", true), 120);
+    const started = Date.now();
+    const go = () => {
+      if (shellSock && shellSock.connected) {
+        setTimeout(() => shellSock.emit("input", { s: shellSeq++, d: cmd + (enter ? "\r" : "") }), 500);
+      } else if (Date.now() - started < 10000) setTimeout(go, 150);
+      else toast("The shell did not open: run the command yourself", "err");
+    };
+    setTimeout(go, 200);
+  }
+  const cliCmd = () => { const c = state.platform && state.platform.sima_cli; return c && c.path ? c.path : "sima-cli"; };
+  const PREREQ = {
+    "sima-cli": { title: "Install sima-cli?", body: "<p>Runs SiMa.ai's installer (<span class=\"mono\">artifacts.neat.sima.ai/sima-cli/linux-mac.sh</span>), which installs sima-cli into <span class=\"mono\">/data/sima-cli</span> on the board. It may install python3-venv with sudo.</p>", go: "Install sima-cli" },
+    core: { title: "Install Neat Core?", body: "<p>Installs Neat Core's runtime packages with sudo and the pyneat Python environment, with <span class=\"mono\">sima-cli neat install core</span>. It takes a few minutes. Stop running apps first: the runtime they use is replaced.</p>", go: "Install Neat Core" },
+    pyneat: { title: "Link pyneat?", body: "<p>Neat Core's Python environment is at <span class=\"mono\">/media/nvme/pyneat</span>; this links <span class=\"mono\">~/pyneat</span> to it, where the Python apps look.</p>", go: "Link It" },
+  };
+  async function installPrereq(what) {
+    const d = PREREQ[what];
+    if (!d) return;
+    const ok = await modal({ title: d.title, body: d.body, actions: [{ label: "Cancel", value: false, cls: "ghost" }, { label: d.go, value: true, cls: "primary solid" }] });
+    if (ok && await post("/api/platform/install", { what })) toast(`${d.go}: see the Setup log`, "info");
+  }
+  function signIn() {
+    toast("Sign in from the Shell: open the link it prints and enter the code", "info");
+    runInShell(`SIMA_CLI_CHECK_FOR_UPDATE=0 ${cliCmd()} login`, true);    // straight to the sign-in, no update prompt
+  }
+  async function updateFirmware() {
+    const fw = state.platform.firmware;
+    const ok = await modal({ title: "Update the Board's Firmware?",
+      body: `<p>The board runs platform <b>${esc(fw.version)}</b>; these apps need <b>${esc(fw.required)}</b> or newer.</p><p><span class="mono">sima-cli update</span> downloads the new firmware, flashes it and <b>reboots the board</b>, which stops everything running, this launcher included. Start the launcher again afterwards and run Set Up Everything.</p><p>The command is typed into the Shell; press Enter there to start it.</p>`,
+      actions: [{ label: "Cancel", value: false, cls: "ghost" }, { label: "Open the Shell", value: true, cls: "primary solid" }] });
+    if (ok) runInShell(`${cliCmd()} update`, false);
+  }
+
   // ------------------------------------------------------------------ home: setup card
   function check(ok, label, detail, warn) {
     return `<li class="${ok ? "ok" : warn ? "warn" : "todo"}"><span class="ck">${icon(ok ? "check" : warn ? "alert" : "x")}</span><div><b>${label}</b><span>${detail}</span></div></li>`;
@@ -502,12 +543,19 @@
     $("#navInsightDot").classList.toggle("hidden", !ins.running);
     const job = p.job && !p.job.done ? p.job : null;
     const b = p.bundle;
+    const fw = p.firmware || { ok: true };
+    const core = p.core;
+    const link = (act, text) => ` · <a href="#" data-act="${act}">${text}</a>`;
     const rows = [
-      check(p.sima_cli.present, "sima-cli", p.sima_cli.present ? `v${esc(p.sima_cli.version || "?")}` : "Not found: install it from docs.sima.ai"),
+      ...(fw.version ? [check(fw.ok, "Firmware", fw.ok ? `Platform <span class="mono">${esc(fw.version)}</span>` : `Platform <span class="mono">${esc(fw.version)}</span>; the apps need ${esc(fw.required)} or newer${link("firmware", "Update Firmware…")}`)] : []),
+      check(p.sima_cli.present, "sima-cli", p.sima_cli.present ? `v${esc(p.sima_cli.version || "?")}` : `Not found${link("install:sima-cli", "Install")}`),
+      check(!p.sima_cli.present || (p.signin && p.signin.present), "Developer Portal", p.signin && p.signin.present ? "Signed in: models can download" : `Sign in so the apps' models can download${p.sima_cli.present ? link("signin", "Sign In") : ""}`, true),
       check(b.present, "Apps Bundle", b.present ? `${b.apps} apps · ${esc(b.ref || b.branch)} <span class="mono">${esc(short(b.spec))}</span>${b.update ? ` · <a href="#" data-act="upgrade">Update to ${esc(b.latest)}</a>` : ""}` : `Installs into <span class="mono">${esc(b.dir)}</span>`, b.present && b.update),
-      check(p.core.present, "Neat Core", p.core.present ? `<span class="mono">${esc(p.core.version)}</span>` : "Comes with the apps bundle"),
+      check(core.ok, "Neat Core", core.ok ? `<span class="mono">${esc(core.version)}</span>`
+        : core.present ? `<span class="mono">${esc(core.version)}</span>; the bundle is built for ${esc(core.wanted)}${p.sima_cli.present && fw.ok ? link("install:core", "Install Neat Core") : ""}`
+        : `Not installed${p.sima_cli.present && fw.ok ? link("install:core", "Install") : ""} (Set Up Everything installs it)`, core.present),
       check(ins.present, "Neat Insight", ins.present ? `${ins.running ? (ins.healthy ? "Running" : "Starting…") : "Installed, not running"} · port ${ins.port}` : "Comes with the apps bundle"),
-      check(p.pyneat.present, "pyneat", p.pyneat.present ? "For the Python versions" : "Only needed for the Python versions", !p.pyneat.present),
+      check(p.pyneat.present, "pyneat", p.pyneat.present ? "For the Python versions" : p.pyneat.linkable ? `Found in /media/nvme/pyneat${link("install:pyneat", "Link It")}` : "For the Python versions; comes with Neat Core", !p.pyneat.present),
       check(p.ffmpeg && p.ffmpeg.present, "ffmpeg", p.ffmpeg && p.ffmpeg.present ? "Insight streams the samples with it" : "Needed to stream the sample videos (installed by setup)"),
       check(p.samples.cached >= p.samples.total, "Sample Videos", `${p.samples.cached} of ${p.samples.total} for the streaming apps`),
       ...(p.samples.images_total ? [check(p.samples.images_cached >= p.samples.images_total, "Sample Images", `${p.samples.images_cached} of ${p.samples.images_total} for the image apps (or fetched on first run)`, p.samples.images_cached < p.samples.images_total)] : []),
@@ -524,8 +572,9 @@
       foot = `<div class="ready-line">${icon("check")}<span>Ready. Pick an app below and press Run.</span></div>
         <div class="btn-row">${ins.running ? `<a class="btn sm" href="#/insight">${icon("eye")}Insight</a>` : `<button class="btn sm" data-act="insight-start">${icon("play")}Start Insight</button>`}<button class="btn sm ghost" data-act="logs:platform">${icon("terminal")}Setup Log</button></div>`;
     } else {
-      foot = `<button class="btn spectrum block" data-act="setup" ${p.sima_cli.present ? "" : "disabled"}>${icon("rocket")}Set Up Everything</button>
-        <div class="muted small">${p.sima_cli.present ? "Installs what's missing above. Models download later, per app." : "Install sima-cli first, then come back."}</div>`;
+      const can = p.sima_cli.present && fw.ok;
+      foot = `<button class="btn spectrum block" data-act="setup" ${can ? "" : "disabled"}>${icon("rocket")}Set Up Everything</button>
+        <div class="muted small">${!fw.ok ? "Update the board's firmware first (above), then come back." : p.sima_cli.present ? "Installs what's missing above. Models download later, per app." : "Install sima-cli first (above), then come back."}</div>`;
     }
     const key = JSON.stringify([rows, foot]);
     const card = $("#setupCard");
