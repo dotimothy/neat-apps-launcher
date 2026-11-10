@@ -802,3 +802,149 @@ class SudoPasswordTests(unittest.TestCase):
             text = f.read_text()
             self.assertNotRegex(text, r"(?i)(password|pw)\s*[:=]\s*[\"'][^\"'${}<>]{4,}[\"']", f.name)
             self.assertNotRegex(text, r'for pw in [^;]*"[a-z]{4,}"\s*;', f.name)
+
+
+class StreamProfileTests(unittest.TestCase):
+    """An app with a config per stream count (high-density: 20, 30, 60): the right config, all its
+    streams, and sample videos at the frame rate the profile expects."""
+    def setUp(self):
+        self.b = Board()
+        self.s, apps = self.b.load()
+        self.a = {x.id: x for x in apps}["multi-app"]
+        common = self.a.config_path().parent
+        for n, fps in ((30, 20), (60, 10)):
+            body = "".join(f"  - <rtsp-url-{i + 1}>\n" for i in range(n))
+            (common / f"config-{n}.yaml").write_text(
+                f"model:\n  path: <model-path>\nstreams:\n{body}input:\n  fps: {fps}\n  skip_rtsp_probe: true\n"
+                "output:\n  insight:\n    host: <insight-host-ip>\n    video_port_base: 9000\n")
+        self.a.profiles = {20: {}, 30: {"config": "config-30.yaml", "fps": 20}, "60": {"config": "config-60.yaml", "fps": 10}}
+        self.a.streams = 20
+
+    def tearDown(self):
+        self.b.close()
+
+    def test_profile_config_and_streams(self):
+        self.assertEqual(self.a.stream_options(), [20, 30, 60])
+        self.assertEqual(self.a.config_path(60).name, "config-60.yaml")
+        self.assertEqual(self.a.config_path(20).name, "config.yaml")
+        self.assertEqual((self.a.pick_streams(60), self.a.pick_streams(16), self.a.pick_streams(None)), (60, 20, 20))
+        urls = [f"rtsp://b:8554/src{i + 1}" for i in range(60)]
+        cfg = runconfig.generate(self.a, model_files=[self.s.models_dir / "m1.tar.gz"], stream_urls=urls, streams=60)
+        self.assertEqual(cfg["streams"], urls)
+        self.assertEqual(cfg["input"]["fps"], 10)
+        self.assertEqual(runconfig.placeholders_left(cfg), [])
+        self.assertEqual(self.a.public()["profiles"]["60"], {"fps": 10})
+
+    def test_sixty_streams_share_forty_sources(self):
+        from unittest import mock
+        import insight as ins
+        _, _, svc = self.b.app()
+        try:
+            asked = []
+            files = [Path(f"/clip{i}-10fps.mp4") for i in range(16)]
+            with mock.patch.object(ins.Insight, "sample_files", lambda self, fps=None, log=None: asked.append(fps) or files), \
+                 mock.patch.object(ins.Insight, "upload", lambda self, path, name=None: path.name), \
+                 mock.patch.object(ins.Insight, "_play", lambda self, slot, name, by_index: f"rtsp://x/src{slot}"), \
+                 mock.patch.object(ins.Insight, "sources", lambda self: []):
+                urls, slots = svc.insight.ensure_streams(60, None, fps=10)
+            self.assertEqual(asked, [10])
+            self.assertEqual(len(urls), 60)
+            self.assertEqual(slots, list(range(1, 41)))                  # Insight has 48 slots; 41.. are for clips
+            self.assertEqual(urls[40], "rtsp://x/src1")                  # stream 41 shares source 1
+            self.assertEqual(len(set(urls)), 40)
+            self.assertEqual((ins.SAMPLE_SLOTS, ins.APP_SLOT_BASE), (40, 41))
+        finally:
+            self.b.close(svc)
+            self.b = Board()
+
+    def test_catalog_clips(self):
+        import hashlib
+        from unittest import mock
+        import insight as ins
+        _, _, svc = self.b.app()
+        try:
+            cat = self.b.root / "catalog"
+            assets = []
+            for src in ("b_street", "a_park"):
+                for fps in (10, 20):
+                    rel = f"{src}/720p{fps}/720p{fps}_h264.mp4"
+                    body = f"{src}-{fps}".encode()
+                    (cat / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (cat / rel).write_bytes(body)
+                    assets.append({"path": rel, "source_id": src, "fps": fps, "bytes": len(body),
+                                   "sha256": hashlib.sha256(body).hexdigest()})
+            (cat / "index.json").write_text(json.dumps({"assets": assets}))
+            with mock.patch.object(ins, "MEDIA_CATALOG", cat.as_uri() + "/"):
+                clips = svc.insight.catalog_clips(10)
+                self.assertEqual([c.name for c in clips], ["neat-apps-catalog-a_park-720p10.mp4", "neat-apps-catalog-b_street-720p10.mp4"])
+                self.assertEqual(clips[0].read_bytes(), b"a_park-10")
+                self.assertIs(svc.insight.catalog_clips(10), clips)        # once
+                (cat / "a_park/720p20/720p20_h264.mp4").write_bytes(b"tampered")
+                with self.assertRaises(ins.InsightError):
+                    svc.insight.catalog_clips(20)
+        finally:
+            self.b.close(svc)
+            self.b = Board()
+
+    @unittest.skipUnless(__import__("shutil").which("ffmpeg") and __import__("shutil").which("ffprobe"), "needs ffmpeg")
+    def test_sample_copy_at_10_fps(self):
+        import subprocess
+        _, _, svc = self.b.app()
+        try:
+            src = svc.insight.cache / svc.insight.sample_name(1)
+            src.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                            "testsrc=size=320x180:rate=16:duration=3", "-c:v", "libx264", str(src)], check=True)
+            out = svc.insight.sample_at(1, 10)
+            self.assertEqual(out.name, "neat-apps-sample-01-10fps.mp4")
+            self.assertEqual(svc.insight.video_info(out)["fps"], 10)
+            key = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
+                                  "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(out)],
+                                 capture_output=True, text=True).stdout.split()
+            self.assertGreaterEqual(len(key), 3)                # a keyframe every second
+            self.assertEqual(svc.insight.sample_at(1, 10), out)  # made once
+            self.assertEqual(svc.insight.sample_at(1), src)
+        finally:
+            self.b.close(svc)
+            self.b = Board()
+
+
+class MkcertStepTests(unittest.TestCase):
+    """Insight's first start needs mkcert; setup installs it through as_root, so Insight never has to."""
+    def test_installs_mkcert_with_the_password(self):
+        import subprocess, tempfile, shutil as sh
+        import bundle
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            for tool in ("bash", "env", "printf", "cat", "true", "chmod"):     # a PATH without the host's mkcert
+                p = sh.which(tool)
+                if p:
+                    os.symlink(p, d / tool)
+            (d / "sudo").write_text('#!/bin/sh\ncase "$1" in -n) exit 1 ;; esac\nread -r pw; [ "$pw" = s3cret ] || exit 1\n'
+                                    'shift 3; [ "$1" = "-v" ] && exit 0; exec "$@"\n')
+            fake_mkcert = (f'#!/bin/sh\ncase "$1" in -CAROOT) echo {d}/ca ;;\n'
+                           f'  -install) mkdir -p {d}/ca; touch {d}/ca/rootCA.pem\n'
+                           f'    [ "$TRUST_STORES" = system ] && {{ [ "$(id -u 2>/dev/null)" = x ] || touch {d}/store/mkcert_development_CA_1.crt; }} ;;\nesac\n')
+            (d / "apt-get").write_text(f'#!/bin/sh\necho "apt-get $*" >> {d}/apt.log\n'
+                                       f'case "$*" in *mkcert*) cat > {d}/mkcert <<\'EOF\'\n{fake_mkcert}EOF\nchmod +x {d}/mkcert ;; esac\n')
+            (d / "store").mkdir()
+            for tool in ("mkdir", "touch", "ls", "id"):
+                p = sh.which(tool)
+                if p and not (d / tool).exists():
+                    os.symlink(p, d / tool)
+            for f in ("sudo", "apt-get"):
+                (d / f).chmod(0o755)
+            run = lambda env: subprocess.run([str(d / "bash"), "-c", bundle.Platform.mkcert_script()], capture_output=True,
+                                             text=True, env={"PATH": str(d), "MKCERT_SYSTEM_STORE": str(d / "store"), **env})
+            r = run({})
+            self.assertEqual(r.returncode, 6, r.stdout + r.stderr)          # no password: stops with a message
+            r = run({"SUDO_PASSWORD": "s3cret"})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("mkcert installed", r.stdout)
+            self.assertIn("install -y mkcert", (d / "apt.log").read_text())
+            self.assertIn("local CA trusted", r.stdout)
+            self.assertTrue((d / "ca" / "rootCA.pem").exists())                 # made as this user
+            self.assertTrue(list((d / "store").glob("mkcert_development_CA_*.crt")))
+            r = run({})
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("already trusted", r.stdout)

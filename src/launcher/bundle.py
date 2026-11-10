@@ -208,6 +208,15 @@ class Platform:
                 return {"tag": "", "error": str(e)}
         return self._cached("latest", 900, fetch)                  # type: ignore[return-value]
 
+    @staticmethod
+    def mkcert() -> dict:
+        """Insight makes its HTTPS certificate with mkcert on its first start, and installs it
+        with sudo apt-get when it is missing, which fails where sudo asks for a password."""
+        import shutil
+        import glob
+        return {"present": bool(shutil.which("mkcert"))
+                and bool(glob.glob("/usr/local/share/ca-certificates/mkcert_development_CA_*.crt"))}
+
     def ffmpeg(self) -> dict:
         """Insight's streaming sources run ffmpeg and probe files with ffprobe."""
         import shutil
@@ -239,10 +248,10 @@ class Platform:
             "sima_cli": cli, "bundle": {**b, "latest": tag, "latest_error": latest.get("error", ""),
                                          "update": update, "branch": self.s.bundle_branch},
             "core": core, "insight": insight, "pyneat": self.pyneat(), "samples": samples,
-            "ffmpeg": self.ffmpeg(), "firmware": fw, "signin": self.signed_in(),
+            "ffmpeg": self.ffmpeg(), "mkcert": self.mkcert(), "firmware": fw, "signin": self.signed_in(),
             "studio_launcher": self.studio_launcher(), "sudo": self.sudo(),
             "ready": bool(fw["ok"] and cli["present"] and b["present"] and core["ok"]
-                          and insight["present"] and self.ffmpeg()["present"]),
+                          and insight["present"] and self.ffmpeg()["present"] and self.mkcert()["present"]),
             "install_root": str(self.s.install_root),
             "catalog": self.s.catalog_source, "modelzoo_version": self.s.modelzoo_version,
         }
@@ -351,6 +360,7 @@ class Platform:
                      + self.insight_script()
                      + 'else\necho "✔ Neat Insight already installed"\nfi\n')
         parts.append(self.ffmpeg_script())
+        parts.append(self.mkcert_script())
         parts.append(self.insight.fetch_samples_script())
         if self.images:
             parts.append(self.images.fetch_script())
@@ -371,6 +381,35 @@ class Platform:
         '  echo "✘ sudo needs a password: enter it when Set Up Everything asks, or run in the Shell: sudo $*"\n'
         '  return 6\n'
         '}\n')
+
+    @classmethod
+    def mkcert_script(cls) -> str:
+        """mkcert, and its local CA trusted by the system, before Insight's first start.
+
+        Insight runs `mkcert -install` to trust its certificate; that writes the CA into the
+        system store with sudo, which fails where sudo asks for a password. So: install mkcert
+        from apt, make the CA as this user (in this user's CAROOT), and add it to the system
+        store with as_root. Insight's own `mkcert -install` then finds it trusted."""
+        return (cls.AS_ROOT +
+                'if ! command -v mkcert >/dev/null; then\n'
+                '  echo "▸ Installing mkcert (Insight makes its HTTPS certificate with it)"\n'
+                '  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y mkcert libnss3-tools < /dev/null '
+                '|| { as_root apt-get update < /dev/null && as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y mkcert libnss3-tools < /dev/null; } '
+                '|| exit 6\n'
+                '  echo "✔ mkcert installed"\n'
+                'fi\n'
+                'caroot="$(mkcert -CAROOT)"\n'
+                'if [ ! -f "$caroot/rootCA.pem" ]; then\n'
+                '  TRUST_STORES=nss mkcert -install > /dev/null 2>&1 || true     # makes the CA, as this user\n'
+                'fi\n'
+                'store="${MKCERT_SYSTEM_STORE:-/usr/local/share/ca-certificates}"\n'
+                'if ls "$store"/mkcert_development_CA_*.crt > /dev/null 2>&1; then\n'
+                '  echo "✔ mkcert\'s local CA already trusted"\n'
+                'else\n'
+                '  echo "▸ Trusting mkcert\'s local CA (Insight\'s HTTPS certificate is signed with it)"\n'
+                '  as_root env CAROOT="$caroot" TRUST_STORES=system mkcert -install < /dev/null || exit 6\n'
+                '  echo "✔ mkcert\'s local CA trusted"\n'
+                'fi\n')
 
     @classmethod
     def ffmpeg_script(cls) -> str:

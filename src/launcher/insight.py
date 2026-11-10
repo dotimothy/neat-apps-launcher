@@ -30,7 +30,13 @@ from pathlib import Path
 
 from registry import Settings
 
-APP_SLOT_BASE = 41          # slots for app-specific clips; 1..16 hold the sample videos
+# Insight has 48 RTSP source slots (DEFAULT_SOURCE_COUNT): 1..40 for the sample videos, 41..48
+# for an app's own clips. An app with more streams than sources shares sources between them:
+# Insight's RTSP server serves a source to any number of readers.
+SAMPLE_SLOTS = 40
+APP_SLOT_BASE = 41
+# Insight's media catalog: its sources at fixed rates (720p10, 720p20, ...), H.264 baseline.
+MEDIA_CATALOG = "https://artifacts.neat.sima.ai/media-assets/"
 
 
 def _ctx() -> ssl.SSLContext:
@@ -49,6 +55,7 @@ class Insight:
         self.settings = settings
         self.host = host
         self.cache = Path(cache_dir) / "media"
+        self._clip_cache: dict[str, list[Path]] = {}
         self.lock = threading.Lock()
 
     # -- basics ---------------------------------------------------------------
@@ -211,13 +218,89 @@ class Insight:
             self._req("POST", "/api/mediasrc/start", {"index": index}, timeout=30)
         return f"rtsp://127.0.0.1:8554/src{index}"
 
-    def ensure_streams(self, count: int, clips: list[Path] | None = None,
-                       log=lambda s: None) -> tuple[list[str], list[int]]:
-        """Start `count` RTSP sources and return (their URLs, slot indexes).
+    def sample_at(self, n: int, fps: int | None = None, log=lambda s: None) -> Path:
+        """Sample video n, or a copy of it at `fps` (made once with ffmpeg, then cached).
 
-        Without clips: the sample videos in slots 1..count, one video each
-        (videos repeat when count > the number of samples). With clips: those
-        files (uploaded first) in slots 41.. for this app."""
+        A profile tuned for many streams (60 at 10 FPS, say) expects its sources at
+        exactly that rate. The copy is H.264 baseline, no B-frames, a keyframe every
+        second, so streams also start quickly."""
+        src = self.cache / self.sample_name(n)
+        if not fps:
+            return src
+        dst = self.cache / f"neat-apps-sample-{n:02d}-{int(fps)}fps.mp4"
+        if dst.is_file() and dst.stat().st_size and dst.stat().st_mtime >= src.stat().st_mtime:
+            return dst
+        import subprocess
+        log(f"Making a {fps} FPS copy of {src.name} (once)")
+        part = dst.with_name(dst.name + ".part.mp4")
+        g = str(int(fps))
+        r = subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-i", str(src), "-an",
+                            "-vf", f"fps={int(fps)}", "-c:v", "libx264", "-preset", "veryfast",
+                            "-profile:v", "baseline", "-bf", "0", "-g", g, "-keyint_min", g,
+                            "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(part)],
+                           capture_output=True, text=True)
+        if r.returncode != 0 or not part.is_file():
+            part.unlink(missing_ok=True)
+            raise InsightError(f"could not make a {fps} FPS copy of {src.name}: {(r.stderr or '').strip()[-300:]}")
+        part.replace(dst)
+        return dst
+
+    def catalog_clips(self, fps: int, log=lambda s: None) -> list[Path]:
+        """Insight's catalog clips at 720p and `fps` (H.264), downloaded once and checked.
+
+        Profiles tuned for many streams (30 at 20 FPS, 60 at 10 FPS) need sources at exactly
+        that rate; the catalog publishes every source at those rates."""
+        import hashlib
+        key = f"catalog-{int(fps)}fps"
+        if key in self._clip_cache:
+            return self._clip_cache[key]
+        want = f"/720p{int(fps)}/720p{int(fps)}_h264.mp4"
+        req = urllib.request.Request(MEDIA_CATALOG + "index.json", headers={"User-Agent": "neat-apps-launcher"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            assets = [a for a in json.loads(r.read()).get("assets", []) if str(a.get("path", "")).endswith(want)]
+        if not assets:
+            raise InsightError(f"Insight's catalog has no 720p {fps} FPS clips")
+        out = []
+        for a in sorted(assets, key=lambda a: a["path"]):
+            dst = self.cache / f"neat-apps-catalog-{a.get('source_id') or Path(a['path']).parts[0]}-720p{int(fps)}.mp4"
+            if not (dst.is_file() and dst.stat().st_size == int(a.get("bytes") or dst.stat().st_size)):
+                log(f"Downloading {dst.name} from Insight's catalog")
+                self.cache.mkdir(parents=True, exist_ok=True)
+                part = dst.with_name(dst.name + ".part")
+                with urllib.request.urlopen(urllib.request.Request(MEDIA_CATALOG + a["path"],
+                                            headers={"User-Agent": "neat-apps-launcher"}), timeout=120) as r:
+                    part.write_bytes(r.read())
+                if a.get("sha256") and hashlib.sha256(part.read_bytes()).hexdigest() != a["sha256"]:
+                    part.unlink(missing_ok=True)
+                    raise InsightError(f"{dst.name}: the download does not match the catalog's checksum")
+                part.replace(dst)
+            out.append(dst)
+        self._clip_cache[key] = out
+        return out
+
+    def sample_files(self, fps: int | None = None, log=lambda s: None) -> list[Path]:
+        """The videos to stream: the sample videos, or clips at `fps` for a profile that asks
+        for a rate (Insight's catalog; copies of the samples if it cannot be reached)."""
+        have = self.cached_samples()
+        if fps:
+            try:
+                return self.catalog_clips(fps, log)
+            except Exception as e:                                 # noqa: BLE001
+                log(f"Insight's catalog is not reachable ({e}); making {fps} FPS copies of the sample videos")
+                if have == 0:
+                    raise InsightError("no sample videos yet: run Set Up Everything (or Get Sample Videos)")
+                return [self.sample_at(n, fps, log) for n in range(1, have + 1)]
+        if have == 0:
+            raise InsightError("no sample videos yet: run Set Up Everything (or Get Sample Videos)")
+        return [self.cache / self.sample_name(n) for n in range(1, have + 1)]
+
+    def ensure_streams(self, count: int, clips: list[Path] | None = None,
+                       log=lambda s: None, fps: int | None = None) -> tuple[list[str], list[int]]:
+        """Start the RTSP sources for `count` streams and return (a URL per stream, slots used).
+
+        Without clips: the sample videos (or clips at `fps`) in slots 1..40, one video each,
+        repeating videos when there are more slots than videos; past 40 streams, streams share
+        sources. With clips: those files (uploaded first) in slots 41.. for this app."""
         with self.lock:
             by_index = {int(s["index"]): s for s in self.sources()}
             urls, slots = [], []
@@ -230,16 +313,17 @@ class Insight:
                     urls.append(self._play(slot, name, by_index))
                     slots.append(slot)
                 return urls, slots
-            have = self.cached_samples()
-            if have == 0:
-                raise InsightError("no sample videos yet: run Set Up Everything (or Get Sample Videos)")
-            for i in range(count):
-                n = (i % have) + 1
-                name = self.upload(self.cache / self.sample_name(n))
+            files = self.sample_files(fps, log)
+            sources = []
+            for i in range(min(count, SAMPLE_SLOTS)):
+                name = self.upload(files[i % len(files)])
                 slot = i + 1
-                log(f"Stream {i + 1}: {name} -> src{slot}")
-                urls.append(self._play(slot, name, by_index))
+                sources.append(self._play(slot, name, by_index))
                 slots.append(slot)
+                log(f"Source {slot}: {name} -> src{slot}")
+            urls = [sources[i % len(sources)] for i in range(count)]
+            if count > len(sources):
+                log(f"{count} streams read {len(sources)} sources (Insight has {SAMPLE_SLOTS} slots for them)")
             return urls, slots
 
     def stop_slots(self, slots: list[int]) -> None:

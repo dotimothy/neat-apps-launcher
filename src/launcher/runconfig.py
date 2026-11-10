@@ -39,8 +39,8 @@ def get_dotted(cfg: dict, key: str, default: Any = None) -> Any:
     return node
 
 
-def load_default(app: App) -> dict:
-    cfg = yaml.safe_load(app.config_path().read_text()) or {}
+def load_default(app: App, streams: int | None = None) -> dict:
+    cfg = yaml.safe_load(app.config_path(streams).read_text()) or {}
     cfg.pop("testing", None)                     # test-harness settings only
     return cfg
 
@@ -48,7 +48,7 @@ def load_default(app: App) -> dict:
 def generate(app: App, *, model_files: list[Path], stream_urls: list[str],
              insight_host: str = "127.0.0.1", channel: int = 0,
              output_dir: Path | None = None, overrides: dict | None = None,
-             stream_video: dict | None = None) -> dict:
+             stream_video: dict | None = None, streams: int | None = None) -> dict:
     """The filled-in config (a dict).
 
     Each <model-path> takes the next chosen model (the first one when there are
@@ -56,7 +56,7 @@ def generate(app: App, *, model_files: list[Path], stream_urls: list[str],
     `stream_video` ({width, height, fps} of the videos being streamed) replaces
     the size an entry with a stream URL declares, where it declares one."""
     bundle = app.settings.bundle
-    cfg = load_default(app)
+    cfg = load_default(app, streams)
     urls = list(stream_urls)
     model_paths = [str(m) for m in model_files]
     used_models = 0
