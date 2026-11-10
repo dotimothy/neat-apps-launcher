@@ -94,6 +94,9 @@ class App:
     before_first_run: dict[str, Any] = field(default_factory=dict)   # {args, creates, label}
     placeholders: dict[str, str] = field(default_factory=dict)       # "<name>": value
     sample_images: str = ""                                          # a set in settings.sample_images
+    # Stream-count profiles: {streams: {config: file in src/common, fps: source frame rate}}.
+    # An app tuned for 20, 30 and 60 streams ships a config for each.
+    profiles: dict[Any, dict[str, Any]] = field(default_factory=dict)
     mla: bool = True
 
     # -- locations -----------------------------------------------------------
@@ -107,8 +110,26 @@ class App:
     def python_main(self) -> Path:
         return self.dir / "src" / "python" / "main.py"
 
-    def config_path(self) -> Path:
-        return self.dir / "src" / "common" / "config.yaml"
+    def config_path(self, streams: int | None = None) -> Path:
+        """The app's config, or the profile config for that many streams."""
+        prof = self.profile(streams) if streams else {}
+        return self.dir / "src" / "common" / (prof.get("config") or "config.yaml")
+
+    def stream_options(self) -> list[int]:
+        """The stream counts the app has a profile for (none: any count)."""
+        return sorted(int(k) for k in (self.profiles or {}))
+
+    def profile(self, streams: int | None) -> dict[str, Any]:
+        for k, v in (self.profiles or {}).items():
+            if int(k) == int(streams or 0):
+                return v or {}
+        return {}
+
+    def pick_streams(self, wanted: int | None) -> int:
+        """A stream count the app supports: the one asked for, else its default."""
+        n = int(wanted or 0) or self.stream_count()
+        opts = self.stream_options()
+        return n if not opts or n in opts else self.stream_count()
 
     def available_languages(self) -> list[str]:
         out = []
@@ -149,6 +170,8 @@ class App:
             "output": self.output, "insight": self.insight, "image": self.image,
             "sections": self.sections, "needs": self.needs, "note": self.note,
             "media": self.media, "streams": self.stream_count(), "link": self.link,
+            "stream_options": self.stream_options(),
+            "profiles": {str(k): {"fps": v.get("fps")} for k, v in (self.profiles or {}).items()},
             "sample_images": self.sample_images,
             "dir": str(self.dir),
         }

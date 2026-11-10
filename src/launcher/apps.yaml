@@ -104,6 +104,8 @@ sample_images:
 #   sample_images: <set>    read this sample image set (see sample_images above)
 #   default_models: [ids]   models downloaded and used by default
 #   streams: N              default number of streams for a multi-stream app
+#   profiles: {N: {config, fps}}
+#                           a config per stream count (in src/common), and the source FPS it expects
 #   config: {a.b: value}    set config keys on every run
 #   link: {label, url}      a button to somewhere else instead of Run
 #   placeholders: {"<name>": value}
@@ -144,7 +146,14 @@ apps:
     note: Uses the small detection pair. For the medium or segmentation models, tick them in Models, then set model.task or model.detection.variant in the config.
 
   - id: high-density-multi-stream-object-detector
-    streams: 16
+    streams: 20
+    # The app ships a tuned config per stream count; 30 and 60 expect 720p sources at exactly
+    # 20 and 10 FPS, so the launcher streams copies of the sample videos made at that rate.
+    profiles:
+      20: {config: config.yaml}
+      30: {config: config-30x720p20fps.yaml, fps: 20}
+      60: {config: config-60x720p10fps.yaml, fps: 10}
+    note: Pick 20, 30 or 60 streams; each uses the app's own tuned profile. 60 streams run at 10 FPS each and fill 60 of Insight's 80 channels.
 
   - id: mipi-camera-capture
     needs: A MIPI CSI camera connected to the DevKit.

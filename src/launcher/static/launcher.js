@@ -461,7 +461,8 @@
     const needs = [];
     if (!(p.core && p.core.ok)) needs.push("Neat Core");
     if (!(p.ffmpeg && p.ffmpeg.present)) needs.push("ffmpeg");
-    return needs.join(" and ");
+    if (p.mkcert && !p.mkcert.present) needs.push("mkcert");
+    return needs.length > 1 ? `${needs.slice(0, -1).join(", ")} and ${needs[needs.length - 1]}` : needs.join("");
   }
   async function setupAll(upgrade) {
     if (upgrade) {
@@ -609,6 +610,7 @@
         : `Not installed${p.sima_cli.present && fw.ok ? link("install:core", "Install") : ""} (Set Up Everything installs it)`, core.present),
       check(ins.present, "Neat Insight", ins.present ? `${ins.running ? (ins.healthy ? "Running" : "Starting…") : "Installed, not running"} · port ${ins.port}` : "Comes with the apps bundle"),
       check(p.pyneat.present, "pyneat", p.pyneat.present ? "For the Python versions" : p.pyneat.linkable ? `Found in /media/nvme/pyneat${link("install:pyneat", "Link It")}` : "For the Python versions; comes with Neat Core", !p.pyneat.present),
+      ...(p.mkcert ? [check(p.mkcert.present, "mkcert", p.mkcert.present ? "Insight makes its HTTPS certificate with it" : "Needed for Insight's HTTPS certificate (installed by setup)")] : []),
       check(p.ffmpeg && p.ffmpeg.present, "ffmpeg", p.ffmpeg && p.ffmpeg.present ? "Insight streams the samples with it" : "Needed to stream the sample videos (installed by setup)"),
       check(p.samples.cached >= p.samples.total, "Sample Videos", `${p.samples.cached} of ${p.samples.total} for the streaming apps`),
       ...(p.samples.images_total ? [check(p.samples.images_cached >= p.samples.images_total, "Sample Images", `${p.samples.images_cached} of ${p.samples.images_total} for the image apps (or fetched on first run)`, p.samples.images_cached < p.samples.images_total)] : []),
@@ -1117,11 +1119,13 @@
     const k = inputKind(a);
     if (a.streams) {
       const custom = p.input === "custom";
-      const n = +(p.streams || a.streams);
-      const counts = k === "streams" ? [1, 2, 4, 8, 16].filter((c) => c <= Math.max(16, a.streams)) : [];
+      const opts = a.stream_options || [];
+      const n = opts.length && !opts.includes(+p.streams) ? a.streams : +(p.streams || a.streams);
+      const counts = opts.length ? opts : k === "streams" ? [1, 2, 4, 8, 16].filter((c) => c <= Math.max(16, a.streams)) : [];
+      const fps = opts.length && a.profiles ? (a.profiles[n] || a.profiles[String(n)] || {}).fps : null;
       parts.push(`<div class="side-card"><h4>${icon("video")}Input</h4>
         <div class="seg"><button data-pref="input" data-val="samples" class="${custom ? "" : "on"}" ${locked ? "disabled" : ""}>${a.media && a.media.length ? "Bundled Clip" : "Sample Videos"}</button><button data-pref="input" data-val="custom" class="${custom ? "on" : ""}" ${locked ? "disabled" : ""}>My RTSP</button></div>
-        ${counts.length ? `<label class="field">Streams <select data-pref="streams" ${locked ? "disabled" : ""}>${counts.map((c) => `<option value="${c}" ${c === n ? "selected" : ""}>${c}</option>`).join("")}</select></label>` : ""}
+        ${counts.length ? `<label class="field">Streams <select data-pref="streams" ${locked ? "disabled" : ""}>${counts.map((c) => `<option value="${c}" ${c === n ? "selected" : ""}>${c}</option>`).join("")}</select></label>${fps ? `<p class="muted small">This profile expects ${fps} FPS sources: the sample videos are streamed at ${fps} FPS.</p>` : ""}` : ""}
         ${custom ? `<textarea class="mono urls" data-pref="urls" placeholder="rtsp://camera-ip:554/stream${n > 1 ? "\nrtsp://…  (one per line)" : ""}" ${locked ? "disabled" : ""}>${esc((p.urls || []).join("\n"))}</textarea>`
           : `<p class="muted small">${a.media && a.media.length ? `Insight streams <span class="mono">${esc(a.media[0].split("/").pop())}</span>` : `Insight streams ${n === 1 ? "a sample video" : `${n} sample videos`}`} over RTSP; the app reads ${n === 1 ? "it" : "them"} like ${n === 1 ? "a camera" : "cameras"}.</p>`}</div>`);
     } else if (k !== "none" && a.sample_set) {

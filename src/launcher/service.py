@@ -234,10 +234,10 @@ class Launcher:
         if self.custom_config_path(aid).exists():
             return self.custom_config_path(aid).read_text()
         prefs = {**self.prefs(aid), **(opts or {})}
-        n = int(prefs.get("streams") or a.stream_count())
+        n = a.pick_streams(prefs.get("streams"))
         urls = self._custom_urls(prefs, n) or [f"rtsp://127.0.0.1:8554/src{i + 1}" for i in range(n)]
         cfg = runconfig.generate(a, model_files=[models.path_of(self.s, m) for m in self.chosen_models(a, prefs)],
-                                 stream_urls=urls, output_dir=self.run_dir(aid) / "output")
+                                 stream_urls=urls, output_dir=self.run_dir(aid) / "output", streams=n)
         return runconfig.dump(cfg)
 
     @staticmethod
@@ -270,7 +270,8 @@ class Launcher:
         cfg_path = rd / "config.yaml"
         out_dir = rd / "output"
         rt = self.mgr.rt[aid]
-        n = int(prefs.get("streams") or a.stream_count()) if a.stream_count() else 0
+        n = a.pick_streams(prefs.get("streams")) if a.stream_count() else 0
+        fps = a.profile(n).get("fps")        # the source frame rate that profile expects
 
         def prepare(log) -> None:
             info: dict[str, Any] = {"lang": lang, "config": str(cfg_path), "channels": [], "slots": [],
@@ -289,13 +290,13 @@ class Launcher:
                     if clips and not all(c.exists() for c in clips):
                         raise RuntimeError(f"the clip {a.media} is not in the bundle")
                     try:
-                        urls, slots = self.insight.ensure_streams(n, clips, log=log)
+                        urls, slots = self.insight.ensure_streams(n, None if not clips else clips, log=log,
+                                                                  fps=None if clips else fps)
                     except InsightError as e:
                         raise RuntimeError(str(e)) from None
                     info["slots"] = slots
                     info["input"] = "samples"
-                    video = self.insight.video_info(clips[0] if clips else
-                                                    self.insight.cache / self.insight.sample_name(1))
+                    video = self.insight.video_info(clips[0] if clips else self.insight.sample_files(fps)[0])
                 else:
                     info["input"] = "custom"
                     log(f"Using your stream URL(s): {', '.join(urls)}")
@@ -325,7 +326,7 @@ class Launcher:
             else:
                 cfg = runconfig.generate(a, model_files=[models.path_of(self.s, m) for m in chosen],
                                          stream_urls=urls, channel=channel, output_dir=out_dir,
-                                         stream_video=video, overrides=image_overrides)
+                                         stream_video=video, overrides=image_overrides, streams=n or None)
                 left = runconfig.placeholders_left(cfg)
                 if left:
                     raise RuntimeError("the config still has placeholders: " + "; ".join(left[:4]))
