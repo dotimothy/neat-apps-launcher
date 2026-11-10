@@ -152,8 +152,9 @@ apps:
     profiles:
       20: {config: config.yaml}
       30: {config: config-30x720p20fps.yaml, fps: 20}
+      48: {config: config-60x720p10fps.yaml, fps: 10}   # the 60-stream profile, 48 of its streams: one Insight source each
       60: {config: config-60x720p10fps.yaml, fps: 10}
-    note: Pick 20, 30 or 60 streams; each uses the app's own tuned profile. 60 streams run at 10 FPS each and fill 60 of Insight's 80 channels.
+    note: Pick 20, 30, 48 or 60 streams; each uses the app's own tuned profile (48 uses the 60-stream one). 48 and 60 streams run at 10 FPS each; 48 gets one Insight source per stream.
 
   - id: mipi-camera-capture
     needs: A MIPI CSI camera connected to the DevKit.

@@ -948,3 +948,48 @@ class MkcertStepTests(unittest.TestCase):
             r = run({})
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("already trusted", r.stdout)
+
+
+class FortyEightStreamTests(unittest.TestCase):
+    """48 streams: the 60-stream profile with 48 of its streams, and one Insight source each
+    (Insight has 48 slots) unless another app holds the clip slots."""
+    def setUp(self):
+        self.b = Board()
+        self.a_, self.c, self.svc = self.b.app()
+        self.a = self.svc.apps["multi-app"]
+        body = "".join(f"  - <rtsp-url-{i + 1}>\n" for i in range(60))
+        (self.a.config_path().parent / "config-60.yaml").write_text(
+            f"model:\n  path: <model-path>\nstreams:\n{body}input:\n  fps: 10\n"
+            "output:\n  insight:\n    host: <insight-host-ip>\n    max_visible_streams: 60\n")
+        self.a.profiles = {48: {"config": "config-60.yaml", "fps": 10}, 60: {"config": "config-60.yaml", "fps": 10}}
+
+    def tearDown(self):
+        self.b.close(self.svc)
+
+    def test_forty_eight_streams_of_the_sixty_profile(self):
+        urls = [f"rtsp://b/src{i + 1}" for i in range(48)]
+        cfg = runconfig.generate(self.a, model_files=[self.svc.s.models_dir / "m1.tar.gz"], stream_urls=urls, streams=48)
+        self.assertEqual(cfg["streams"], urls)
+        self.assertEqual(runconfig.placeholders_left(cfg), [])
+        self.assertEqual(cfg["output"]["insight"]["max_visible_streams"], 48)   # the app refuses 60 > 48
+        cfg = runconfig.generate(self.a, model_files=[self.svc.s.models_dir / "m1.tar.gz"],
+                                 stream_urls=[f"rtsp://b/src{i + 1}" for i in range(60)], streams=60)
+        self.assertEqual(cfg["output"]["insight"]["max_visible_streams"], 60)
+
+    def test_one_source_per_stream_when_the_clip_slots_are_free(self):
+        from unittest import mock
+        import insight as ins
+        files = [Path(f"/c{i}.mp4") for i in range(16)]
+        with mock.patch.object(ins.Insight, "sample_files", lambda self, fps=None, log=None: files), \
+             mock.patch.object(ins.Insight, "upload", lambda self, path, name=None: path.name), \
+             mock.patch.object(ins.Insight, "_play", lambda self, slot, name, by_index: f"rtsp://x/src{slot}"), \
+             mock.patch.object(ins.Insight, "sources", lambda self: []):
+            self.assertEqual(self.svc._free_sample_sources("multi-app"), 48)
+            urls, slots = self.svc.insight.ensure_streams(48, None, fps=10, max_sources=48)
+            self.assertEqual((len(set(urls)), slots), (48, list(range(1, 49))))
+            other = self.svc.apps["stream-app"]
+            self.svc.mgr.rt[other.id].info = {"slots": [41]}
+            with mock.patch.object(self.svc.mgr, "is_running", lambda uid: uid == other.id):
+                self.assertEqual(self.svc._free_sample_sources("multi-app"), 40)
+            urls, slots = self.svc.insight.ensure_streams(48, None, fps=10, max_sources=40)
+            self.assertEqual((len(set(urls)), len(slots)), (40, 40))

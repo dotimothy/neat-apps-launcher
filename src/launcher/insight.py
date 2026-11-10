@@ -35,6 +35,7 @@ from registry import Settings
 # Insight's RTSP server serves a source to any number of readers.
 SAMPLE_SLOTS = 40
 APP_SLOT_BASE = 41
+SOURCE_SLOTS = 48           # all of Insight's slots, for sample streams when no app holds 41..48
 # Insight's media catalog: its sources at fixed rates (720p10, 720p20, ...), H.264 baseline.
 MEDIA_CATALOG = "https://artifacts.neat.sima.ai/media-assets/"
 
@@ -295,12 +296,14 @@ class Insight:
         return [self.cache / self.sample_name(n) for n in range(1, have + 1)]
 
     def ensure_streams(self, count: int, clips: list[Path] | None = None,
-                       log=lambda s: None, fps: int | None = None) -> tuple[list[str], list[int]]:
+                       log=lambda s: None, fps: int | None = None,
+                       max_sources: int = SAMPLE_SLOTS) -> tuple[list[str], list[int]]:
         """Start the RTSP sources for `count` streams and return (a URL per stream, slots used).
 
         Without clips: the sample videos (or clips at `fps`) in slots 1..40, one video each,
         repeating videos when there are more slots than videos; past 40 streams, streams share
-        sources. With clips: those files (uploaded first) in slots 41.. for this app."""
+        sources (up to `max_sources`: 48 when no running app holds the clip slots). With clips:
+        those files (uploaded first) in slots 41.. for this app."""
         with self.lock:
             by_index = {int(s["index"]): s for s in self.sources()}
             urls, slots = [], []
@@ -315,7 +318,7 @@ class Insight:
                 return urls, slots
             files = self.sample_files(fps, log)
             sources = []
-            for i in range(min(count, SAMPLE_SLOTS)):
+            for i in range(min(count, max(1, min(max_sources, SOURCE_SLOTS)))):
                 name = self.upload(files[i % len(files)])
                 slot = i + 1
                 sources.append(self._play(slot, name, by_index))
@@ -323,7 +326,7 @@ class Insight:
                 log(f"Source {slot}: {name} -> src{slot}")
             urls = [sources[i % len(sources)] for i in range(count)]
             if count > len(sources):
-                log(f"{count} streams read {len(sources)} sources (Insight has {SAMPLE_SLOTS} slots for them)")
+                log(f"{count} streams read {len(sources)} sources (Insight has {len(sources)} slots free for them)")
             return urls, slots
 
     def stop_slots(self, slots: list[int]) -> None:
