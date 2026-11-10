@@ -221,6 +221,17 @@ class Launcher:
                 used.update(self.mgr.rt[aid].info.get("channels", []))
         return used
 
+    def _free_sample_sources(self, aid: str) -> int:
+        """How many Insight slots sample streams may use: all 48 unless another running app
+        holds one of the clip slots (41..48)."""
+        from insight import APP_SLOT_BASE, SAMPLE_SLOTS, SOURCE_SLOTS
+        for other in self.order:
+            if other != aid and self.mgr.is_running(other):
+                held = set((self.mgr.rt[other].info or {}).get("slots") or [])
+                if held & set(range(APP_SLOT_BASE, SOURCE_SLOTS + 1)):
+                    return SAMPLE_SLOTS
+        return SOURCE_SLOTS
+
     def _free_channel_base(self, aid: str, n: int) -> int:
         used = self._used_channels(aid)
         for base in range(0, MAX_CHANNELS - n + 1):
@@ -291,7 +302,8 @@ class Launcher:
                         raise RuntimeError(f"the clip {a.media} is not in the bundle")
                     try:
                         urls, slots = self.insight.ensure_streams(n, None if not clips else clips, log=log,
-                                                                  fps=None if clips else fps)
+                                                                  fps=None if clips else fps,
+                                                                  max_sources=self._free_sample_sources(aid))
                     except InsightError as e:
                         raise RuntimeError(str(e)) from None
                     info["slots"] = slots

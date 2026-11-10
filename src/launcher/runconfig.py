@@ -100,6 +100,12 @@ def generate(app: App, *, model_files: list[Path], stream_urls: list[str],
     cfg = _undrop(cfg)
     if isinstance(cfg.get("streams"), list) and urls:
         cfg["streams"].extend(_more_streams(cfg["streams"], urls))   # more streams than placeholders
+    if isinstance(cfg.get("streams"), list):
+        # A profile run with fewer streams than it was written for (48 of the 60-stream one):
+        # apps refuse a visible-stream count above the stream count.
+        ins = get_dotted(cfg, "output.insight")
+        if isinstance(ins, dict) and isinstance(ins.get("max_visible_streams"), int):
+            ins["max_visible_streams"] = min(ins["max_visible_streams"], len(cfg["streams"])) or ins["max_visible_streams"]
     if output_dir is not None and app.output.get("key"):
         key = app.output["key"]
         old = get_dotted(cfg, key, "")
