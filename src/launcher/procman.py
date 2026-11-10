@@ -376,7 +376,7 @@ class Manager:
 
     def run_job(self, uid: str, kind: str, script: str, cwd: Path,
                 after: Callable[[int], None] | None = None, fresh: bool = True,
-                title: str = "") -> Job:
+                title: str = "", env: dict | None = None) -> Job:
         """Run a bash script as a job of this unit (one at a time). stdin is
         closed, so scripts that would ask a question take their defaults."""
         if self.busy(uid):
@@ -393,7 +393,7 @@ class Manager:
             log = open(self.job_log(uid), "ab")
             try:
                 job.proc = subprocess.Popen(
-                    ["bash", "-c", "set -eo pipefail\n" + script], cwd=str(cwd), env=self.env(),
+                    ["bash", "-c", "set -eo pipefail\n" + script], cwd=str(cwd), env=self.env(env),
                     stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                     start_new_session=True)
                 job.code = job.proc.wait()

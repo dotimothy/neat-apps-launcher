@@ -167,7 +167,7 @@
       const back = document.createElement("div");
       back.className = "modal-back";
       back.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h3>${esc(title)}</h3>${body || ""}
-        ${input ? `<input id="modalInput" placeholder="${esc(input.placeholder || "")}" autocomplete="off">` : ""}
+        ${input ? `<input id="modalInput" type="${input.type === "password" ? "password" : "text"}" placeholder="${esc(input.placeholder || "")}" autocomplete="${input.type === "password" ? "current-password" : "off"}">` : ""}
         <div class="btn-row"></div></div>`;
       const row = back.querySelector(".btn-row");
       const close = (v) => { back.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
@@ -445,13 +445,33 @@
     await appAct(id, force ? "kill" : "stop");
   }
 
+  // When a step needs root and sudo asks for a password the launcher was not given, ask for it:
+  // it goes to that one job and is not stored. null: cancelled; "": go on without it.
+  async function sudoPassword(needed) {
+    const su = state.platform && state.platform.sudo;
+    if (!needed || !su || su.passwordless || su.password_set) return "";
+    const pw = await modal({ title: "Password for sudo",
+      body: `<p>Installing ${esc(needed)} needs root, and this board asks sudo for a password. Enter the password of the board's user. It is used for this run only and is not saved.</p><p class="muted small">Leave it empty to skip: the steps that need root then stop with a message.</p>`,
+      input: { type: "password", placeholder: "sudo password" },
+      actions: [{ label: "Cancel", value: null, cls: "ghost" }, { label: "Continue", value: true, cls: "primary solid" }] });
+    return pw === null || pw === undefined ? null : String(pw);
+  }
+  function rootSteps() {
+    const p = state.platform || {};
+    const needs = [];
+    if (!(p.core && p.core.ok)) needs.push("Neat Core");
+    if (!(p.ffmpeg && p.ffmpeg.present)) needs.push("ffmpeg");
+    return needs.join(" and ");
+  }
   async function setupAll(upgrade) {
     if (upgrade) {
       const ok = await modal({ title: "Upgrade the Apps Bundle?", body: `<p>Runs <span class="mono">sima-cli neat install apps</span> again. It keeps <span class="mono">models/</span> and backs up the old bundle to <span class="mono">.prebuilt-apps-backup/</span>. Running apps should be stopped first.</p>`,
         actions: [{ label: "Cancel", value: false, cls: "ghost" }, { label: "Upgrade", value: true, cls: "primary" }] });
       if (!ok) return;
     }
-    if (await post("/api/platform/setup", { upgrade: !!upgrade })) toast(upgrade ? "Upgrading the apps bundle" : "Setting up the board", "info");
+    const pw = await sudoPassword(upgrade ? "the bundle's Neat Core" : rootSteps());
+    if (pw === null) return;
+    if (await post("/api/platform/setup", { upgrade: !!upgrade, ...(pw ? { sudo_password: pw } : {}) })) toast(upgrade ? "Upgrading the apps bundle" : "Setting up the board", "info");
   }
 
   async function killPid(pid) {
@@ -548,7 +568,10 @@
     const d = PREREQ[what];
     if (!d) return;
     const ok = await modal({ title: d.title, body: d.body, actions: [{ label: "Cancel", value: false, cls: "ghost" }, { label: d.go, value: true, cls: "primary solid" }] });
-    if (ok && await post("/api/platform/install", { what })) toast(`${d.go}: see the Setup log`, "info");
+    if (!ok) return;
+    const pw = what === "core" ? await sudoPassword("Neat Core") : "";
+    if (pw === null) return;
+    if (await post("/api/platform/install", { what, ...(pw ? { sudo_password: pw } : {}) })) toast(`${d.go}: see the Setup log`, "info");
   }
   function signIn() {
     toast("Sign in from the Shell: open the link it prints and enter the code", "info");

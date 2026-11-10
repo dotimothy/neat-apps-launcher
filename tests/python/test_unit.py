@@ -697,3 +697,108 @@ class StudioLauncherTests(unittest.TestCase):
             self.assertTrue(wait(lambda: self.svc.mgr.rt["platform"].job and self.svc.mgr.rt["platform"].job.done, 20))
         self.assertEqual(self.svc.mgr.rt["platform"].job.code, 0)
         self.assertIn("fake install", (self.b.root / "logs" / "platform-job.log").read_text())
+
+
+class CoreCheckTests(unittest.TestCase):
+    """The Neat Core check as bash runs it in Set Up Everything (a bundle pinned to a commit, as
+    main's is), and the default query's quoting."""
+    def setUp(self):
+        self.b = Board()
+        self.a, self.c, self.svc = self.b.app()
+        (self.svc.s.bundle / "deps" / "neat-core.json").write_text(
+            json.dumps({"neat-core": {"ref": "main", "spec": "f2d49f4ac6b7"}}))
+
+    def tearDown(self):
+        self.b.close(self.svc)
+
+    def run_step(self):
+        import subprocess
+        p = self.svc.platform
+        script = "set -euo pipefail\n" + p.core_step_script()
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    def test_commit_pinned_core(self):
+        (self.b.root / "core-version").write_text("0.6.1+main.f2d49f4ac6b7\n")
+        self.svc.platform.forget()
+        core = self.svc.platform.core()
+        self.assertEqual((core["ok"], core["wanted"]), (True, "main f2d49f4ac6b7"))
+        r = self.run_step()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("already installed", r.stdout)
+        (self.b.root / "core-version").write_text("0.6.0+main.0123456789ab\n")
+        self.svc.platform.forget()
+        self.assertFalse(self.svc.platform.core()["ok"])
+        r = self.run_step()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Installing Neat Core", r.stdout)
+        self.assertEqual((self.b.root / "core-version").read_text().strip(), "0.5.0+fake")
+
+    def test_default_query_survives_bash(self):
+        """bash must pass ${Version} to dpkg-query as written (it used to expand it to nothing)."""
+        import subprocess
+        fake = self.b.root / "fakebin"
+        fake.mkdir()
+        (fake / "dpkg-query").write_text('#!/bin/sh\n[ "$2" = "-f=\\${Version}" ] && echo 0.6.1 || { echo "bad format: $2" >&2; exit 2; }\n')
+        (fake / "dpkg-query").chmod(0o755)
+        q = registry.Settings.__dataclass_fields__["core_query"].default
+        r = subprocess.run(["bash", "-c", f"set -e; have=$({q} || true); echo \"[$have]\""],
+                           capture_output=True, text=True, env={**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"})
+        self.assertEqual(r.stdout.strip(), "[0.6.1]", r.stderr)
+
+
+class SudoPasswordTests(unittest.TestCase):
+    """Setup steps that need root, on a board where sudo asks for a password: the password comes
+    from the user for one job (or config.local.yaml), and is never written down."""
+    def setUp(self):
+        self.b = Board()
+        self.a, self.c, self.svc = self.b.app()
+        self.fake = self.b.root / "sudobin"
+        self.fake.mkdir()
+        # A sudo that refuses -n and accepts only "s3cret" on stdin with -S.
+        (self.fake / "sudo").write_text(
+            '#!/bin/sh\n'
+            'case "$1" in -n) exit 1 ;; esac\n'
+            'read -r pw; [ "$pw" = "s3cret" ] || { echo "Sorry, try again." >&2; exit 1; }\n'
+            'shift 3; [ "$1" = "-v" ] && exit 0; exec "$@"\n')
+        (self.fake / "sudo").chmod(0o755)
+
+    def tearDown(self):
+        self.b.close(self.svc)
+
+    def as_root(self, env):
+        import subprocess
+        import bundle
+        script = bundle.Platform.AS_ROOT + 'as_root echo "ran as root"\n'
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                              env={"PATH": f"{self.fake}:/usr/bin:/bin", **env})
+
+    def test_as_root_uses_the_password_it_is_given(self):
+        r = self.as_root({"SUDO_PASSWORD": "s3cret"})
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "ran as root"), r.stderr)
+        r = self.as_root({"SUDO_PASSWORD": "wrong"})
+        self.assertEqual(r.returncode, 6)
+        r = self.as_root({})
+        self.assertEqual(r.returncode, 6)
+        self.assertIn("sudo needs a password", r.stdout)
+
+    def test_password_goes_to_the_job_only(self):
+        from unittest import mock
+        script = 'if [ "${SUDO_PASSWORD:-}" = s3cret ]; then echo "got the password"; else echo "no password"; fi\n'
+        with mock.patch.object(self.svc.platform, "setup_script", return_value=script):
+            self.assertTrue(self.c.post("/api/platform/setup", json={"sudo_password": "s3cret"}).json["ok"])
+            self.assertTrue(wait(lambda: self.svc.mgr.rt["platform"].job and self.svc.mgr.rt["platform"].job.done, 20))
+            log = (self.b.root / "logs" / "platform-job.log").read_text()
+            self.assertIn("got the password", log)
+            self.assertNotIn("s3cret", log)
+            self.c.post("/api/platform/dismiss")
+            self.assertTrue(self.c.post("/api/platform/setup", json={}).json["ok"])
+            self.assertTrue(wait(lambda: self.svc.mgr.rt["platform"].job and self.svc.mgr.rt["platform"].job.done, 20))
+            self.assertIn("no password", (self.b.root / "logs" / "platform-job.log").read_text())
+        self.assertNotIn("s3cret", "".join(p.read_text(errors="ignore") for p in self.b.root.rglob("*.json")))
+
+    def test_no_password_is_written_into_the_code(self):
+        src = ROOT / "src" / "launcher"
+        for f in [*src.glob("*.py"), *src.glob("*.yaml"), src / "static" / "launcher.js"]:
+            text = f.read_text()
+            self.assertNotRegex(text, r"(?i)(password|pw)\s*[:=]\s*[\"'][^\"'${}<>]{4,}[\"']", f.name)
+            self.assertNotRegex(text, r'for pw in [^;]*"[a-z]{4,}"\s*;', f.name)

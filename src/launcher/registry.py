@@ -33,7 +33,8 @@ class Settings:
     catalog_source: dict[str, Any] = field(default_factory=dict)
     sample_images: dict[str, Any] = field(default_factory=dict)   # set name: {label, from, files}
     platform_version: str = ""        # firmware the apps need; default: the model zoo's major.minor
-    core_query: str = "dpkg-query -W -f=${Version} sima-neat"     # prints the installed Neat Core version
+    sudo_password: str = ""           # only in config.local.yaml: lets setup steps use sudo
+    core_query: str = "dpkg-query -W -f='${Version}' sima-neat"   # prints the installed Neat Core version (run by bash too)
 
     @property
     def bundle(self) -> Path:
@@ -193,7 +194,8 @@ def load(path: str | os.PathLike | None = None, override: str | os.PathLike | No
         catalog_source=cat.get("source", {}),
         sample_images=data.get("sample_images", {}) or {},
         platform_version=str(data.get("platform_version", "") or ""),
-        core_query=str(data.get("core_query") or "dpkg-query -W -f=${Version} sima-neat"),
+        sudo_password=str(data.get("sudo_password", "") or ""),
+        core_query=str(data.get("core_query") or "dpkg-query -W -f='${Version}' sima-neat"),
     )
     if os.environ.get("NEAT_APPS_INSIGHT_PORT"):
         settings.insight["port"] = int(os.environ["NEAT_APPS_INSIGHT_PORT"])

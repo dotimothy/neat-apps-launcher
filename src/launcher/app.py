@@ -207,11 +207,11 @@ def create_app(settings=None, apps=None, logs_dir=None, cache_dir=None, runs_dir
         body = request.get_json(silent=True) or {}
         try:
             if action == "setup":
-                svc.setup_all(upgrade=bool(body.get("upgrade")))
+                svc.setup_all(upgrade=bool(body.get("upgrade")), sudo_password=body.get("sudo_password") or None)
             elif action == "samples":
                 svc.fetch_samples()
             elif action == "install":
-                svc.install(str(body.get("what", "")))
+                svc.install(str(body.get("what", "")), sudo_password=body.get("sudo_password") or None)
             elif action == "cancel":
                 mgr.cancel_job("platform")
             elif action == "dismiss":
