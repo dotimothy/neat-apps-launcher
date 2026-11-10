@@ -20,6 +20,8 @@ insight:
   sample_count: 16
 
 studio_launcher_port: 8090         # Neat Studio Launcher, linked from GenAI apps
+# sudo_password: only ever in config.local.yaml (kept out of git). Setup steps that need root
+# (Neat Core, ffmpeg) use it when sudo asks for a password; without it, Set Up Everything asks.
 
 # Sample input images ------------------------------------------------------------
 # Photo sets for the apps that read pictures, downloaded into the launcher's

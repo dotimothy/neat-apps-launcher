@@ -109,7 +109,7 @@ class Platform:
         n = len(list(b.glob("examples/*/*/src"))) if b.is_dir() else 0
         return {"present": (b / "examples").is_dir(), "dir": str(b),
                 "ref": apps.get("ref", ""), "spec": apps.get("spec", ""),
-                "core_ref": core.get("ref", ""), "apps": n}
+                "core_ref": core.get("ref", ""), "core_spec": core.get("spec", ""), "apps": n}
 
     def core(self) -> dict:
         """Neat Core (the sima-neat package), and whether it is the one the bundle
@@ -118,12 +118,16 @@ class Platform:
             out = _run(shlex.split(self.s.core_query))
             return out.strip() if out and "no packages" not in out.lower() else ""
         v = self._cached("core-ver", 300, ver)
-        wanted = self.bundle().get("core_ref", "")
-        want = version_tuple(wanted)
-        have = version_tuple(v)
-        matches = not want or have[:len(want)] == want
-        return {"present": bool(v), "version": v, "wanted": wanted.lstrip("v") if want else "",
-                "ok": bool(v) and matches}
+        b = self.bundle()
+        ref, spec = b.get("core_ref", ""), b.get("core_spec", "")
+        want = version_tuple(ref)
+        if want:                                  # a release: 0.6.1 matches 0.6.1+main.f2d49f4ac6b7
+            matches, wanted = version_tuple(v)[:len(want)] == want, ref.lstrip("v")
+        elif re.fullmatch(r"[0-9a-f]{7,40}", spec or ""):   # a branch build: its commit is in the version
+            matches, wanted = spec[:12] in v, f"{ref or 'main'} {spec[:12]}"
+        else:
+            matches, wanted = True, ""
+        return {"present": bool(v), "version": v, "wanted": wanted, "ok": bool(v) and matches}
 
     def firmware(self) -> dict:
         """The board's platform build against what the apps need: the model zoo's
@@ -172,6 +176,17 @@ class Platform:
         d = shlex.quote(str(self.s.install_root / STUDIO_LAUNCHER_DIR))
         return ('echo "▸ Starting Neat Studio Launcher"\n'
                 f"{d}/run.sh --daemon --port {int(self.s.studio_launcher_port)}\n")
+
+    def sudo(self) -> dict:
+        """Can the setup steps use sudo: without a password, or with one the launcher was given?"""
+        def check():
+            try:
+                return subprocess.run(["sudo", "-n", "true"], capture_output=True, timeout=5,
+                                      stdin=subprocess.DEVNULL).returncode == 0
+            except Exception:                                      # noqa: BLE001
+                return False
+        configured = bool(self.s.sudo_password or os.environ.get("SUDO_PASSWORD") or os.environ.get("DEVKIT_PASSWORD"))
+        return {"passwordless": self._cached("sudo", 60, check), "password_set": configured}
 
     @staticmethod
     def signed_in() -> dict:
@@ -225,7 +240,7 @@ class Platform:
                                          "update": update, "branch": self.s.bundle_branch},
             "core": core, "insight": insight, "pyneat": self.pyneat(), "samples": samples,
             "ffmpeg": self.ffmpeg(), "firmware": fw, "signin": self.signed_in(),
-            "studio_launcher": self.studio_launcher(),
+            "studio_launcher": self.studio_launcher(), "sudo": self.sudo(),
             "ready": bool(fw["ok"] and cli["present"] and b["present"] and core["ok"]
                           and insight["present"] and self.ffmpeg()["present"]),
             "install_root": str(self.s.install_root),
@@ -290,14 +305,19 @@ class Platform:
         """In Set Up Everything, after the bundle: install Core when it is missing or is
         not the one the bundle names (the check runs then, against the new bundle)."""
         deps = shlex.quote(str(self.s.bundle / "deps" / "neat-core.json"))
-        return (f'want=$(python3 -c \'import json,sys; print((json.load(open(sys.argv[1])).get("neat-core") or {{}}).get("ref","").lstrip("v"))\' {deps} 2>/dev/null)\n'
-                f'have=$({self._core_query_sh()})\n'
-                'case "$want" in [0-9]*) ;; *) want="" ;; esac\n'
-                'if [ -n "$have" ] && { [ -z "$want" ] || [ "${have#"$want"}" != "$have" ]; }; then\n'
+        read = ("import json,sys; c=json.load(open(sys.argv[1])).get('neat-core') or {}; "
+                "print(c.get('ref','').lstrip('v'), c.get('spec',''))")
+        return (f'read -r want spec <<< "$(python3 -c "{read}" {deps} 2>/dev/null || true)"\n'
+                f'have=$({self._core_query_sh()} || true)\n'
+                '# a release (0.6.1) matches by its version; a branch build (main) by its commit\n'
+                'case "$want" in [0-9]*) match="$want"; [ "${have#"$want"}" != "$have" ] && ok=1 || ok=0 ;;\n'
+                '  *) match="${spec:0:12}"; case "$have" in *"$match"*) ok=1 ;; *) ok=0 ;; esac; [ -n "$match" ] || ok=1 ;;\n'
+                'esac\n'
+                'if [ -n "$have" ] && [ "$ok" = 1 ]; then\n'
                 '  echo "✔ Neat Core $have already installed"\n'
                 + "".join("  " + line + "\n" for line in self.pyneat_link_script().splitlines()) +
                 'else\n'
-                '  [ -n "$have" ] && echo "▸ Neat Core $have is installed; the bundle is built for ${want}"\n'
+                '  [ -n "$have" ] && echo "▸ Neat Core $have is installed; the bundle is built for ${want} ${match}"\n'
                 + "".join("  " + line + "\n" for line in self.core_script().splitlines()) +
                 'fi\n')
 
@@ -336,19 +356,32 @@ class Platform:
             parts.append(self.images.fetch_script())
         return "".join(parts)
 
-    @staticmethod
-    def ffmpeg_script() -> str:
-        """Insight streams the sample videos with ffmpeg. The board's apt has it;
-        installing needs sudo (passwordless on the DevKit's sima user)."""
-        return ('if command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; then\n'
+    # sudo for the setup steps: without a password where the board allows it, else with
+    # SUDO_PASSWORD / DEVKIT_PASSWORD (Neat Core's own installer reads them too). The launcher
+    # sets SUDO_PASSWORD for one job from what the user typed, or from sudo_password in
+    # config.local.yaml; it never stores or logs a password.
+    AS_ROOT = (
+        'as_root() {\n'
+        '  if sudo -n true 2>/dev/null; then sudo -n "$@"; return; fi\n'
+        '  local pw\n'
+        '  for pw in "${SUDO_PASSWORD:-}" "${DEVKIT_PASSWORD:-}"; do\n'
+        '    [ -n "$pw" ] || continue\n'
+        '    if printf \'%s\\n\' "$pw" | sudo -S -p \'\' -v 2>/dev/null; then printf \'%s\\n\' "$pw" | sudo -S -p \'\' "$@"; return; fi\n'
+        '  done\n'
+        '  echo "✘ sudo needs a password: enter it when Set Up Everything asks, or run in the Shell: sudo $*"\n'
+        '  return 6\n'
+        '}\n')
+
+    @classmethod
+    def ffmpeg_script(cls) -> str:
+        """Insight streams the sample videos with ffmpeg. The board's apt has it."""
+        return (cls.AS_ROOT +
+                'if command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null; then\n'
                 '  echo "✔ ffmpeg already installed"\n'
                 'else\n'
                 '  echo "▸ Installing ffmpeg (Insight streams the sample videos with it)"\n'
-                '  if sudo -n true 2>/dev/null; then\n'
-                '    sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg '
-                '|| { sudo -n apt-get update && sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg; }\n'
-                '    echo "✔ ffmpeg installed"\n'
-                '  else\n'
-                '    echo "✘ ffmpeg is missing and sudo needs a password: run sudo apt-get install -y ffmpeg in the Shell"; exit 6\n'
-                '  fi\n'
+                '  as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg < /dev/null '
+                '|| { as_root apt-get update < /dev/null && as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg < /dev/null; } '
+                '|| exit 6\n'
+                '  echo "✔ ffmpeg installed"\n'
                 'fi\n')

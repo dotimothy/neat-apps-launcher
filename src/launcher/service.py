@@ -131,7 +131,12 @@ class Launcher:
         self.emit("platform", self.platform_status())
 
     # -- platform ----------------------------------------------------------------
-    def setup_all(self, upgrade: bool = False) -> None:
+    def _sudo_env(self, password: str | None) -> dict:
+        """SUDO_PASSWORD for one job: what the user typed, else sudo_password in config.local.yaml."""
+        pw = password or self.s.sudo_password
+        return {"SUDO_PASSWORD": pw} if pw else {}
+
+    def setup_all(self, upgrade: bool = False, sudo_password: str | None = None) -> None:
         script = self.platform.setup_script(upgrade=upgrade)
 
         def after(code: int) -> None:
@@ -141,9 +146,10 @@ class Launcher:
                 self.start_insight()
         self.mgr.run_job("platform", "setup", script, self.s.install_root
                          if self.s.install_root.is_dir() else Path.home(), after=after,
-                         title="Upgrade apps bundle" if upgrade else "Set up everything")
+                         title="Upgrade apps bundle" if upgrade else "Set up everything",
+                         env=self._sudo_env(sudo_password))
 
-    def install(self, what: str) -> None:
+    def install(self, what: str, sudo_password: str | None = None) -> None:
         """One piece on its own: sima-cli, Neat Core, the ~/pyneat link, or Neat Studio Launcher."""
         scripts = {"sima-cli": (self.platform.sima_cli_script, "Install sima-cli"),
                    "core": (self.platform.core_script, "Install Neat Core"),
@@ -157,7 +163,8 @@ class Launcher:
         def after(code: int) -> None:
             self.platform.forget()
             self._pstatus = (0.0, {})
-        self.mgr.run_job("platform", what, make(), Path.home(), after=after, title=title)
+        self.mgr.run_job("platform", what, make(), Path.home(), after=after, title=title,
+                         env=self._sudo_env(sudo_password))
 
     def fetch_samples(self) -> None:
         self.mgr.run_job("platform", "samples", self.insight.fetch_samples_script() + self.images.fetch_script(),
